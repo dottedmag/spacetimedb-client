@@ -1,0 +1,12 @@
+- semver: 0.1.0
+  date: 2026-03-13T23:03:44.292181307Z
+  packager: Dj Gilcrease <digitalxero@gmail.com>
+  changes:
+    - commit: 04d90a9b6e147bf71a2848ec9043b805e4c3bb1b
+      note: 'feat: initial commit'
+      author:
+        name: Dj Gilcrease
+        email: digitalxero@gmail.com
+      committer:
+        name: Dj Gilcrease
+        email: digitalxero@gmail.com
