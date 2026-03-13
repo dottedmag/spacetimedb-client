@@ -1,0 +1,245 @@
+# GitLab CI/CD Configuration for SpacetimeDB Go Client
+# Go client library for SpacetimeDB with BSATN serialization, WebSocket transport, and caching
+
+# Define stages
+stages:
+  - test
+  - release
+
+# Variables
+variables:
+  GIT_DEPTH: 0
+  # Go configuration
+  GOPATH: $CI_PROJECT_DIR/.go
+  GOCACHE: $CI_PROJECT_DIR/.cache/go-build
+  # SpacetimeDB configuration
+  SPACETIMEDB_VERSION: "v2.0.5"
+  SPACETIMEDB_URI: "ws://spacetimedb:3000"
+
+# Go build cache template
+.go_cache:
+  image: golang:1.25
+  cache:
+    key: go-${CI_COMMIT_REF_SLUG}
+    paths:
+      - .go/pkg/mod/
+      - .cache/go-build/
+    policy: pull-push
+
+# =============================================================================
+# TEST STAGE
+# =============================================================================
+
+# Unit tests with race detection and coverage
+test:unit:
+  extends: .go_cache
+  stage: test
+  before_script:
+    - go version
+    - go mod download
+  script:
+    - echo "Running unit tests with race detection..."
+    - go vet ./...
+    - go test -v -race -coverprofile=coverage.out ./...
+    - go tool cover -func=coverage.out | tee coverage.txt
+    - |
+      # Extract coverage percentage
+      COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
+      echo "Total coverage: ${COVERAGE}%"
+  coverage: '/total:\s+\(statements\)\s+(\d+\.\d+)%/'
+  artifacts:
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+    paths:
+      - coverage.out
+      - coverage.txt
+    expire_in: 7 days
+    when: always
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH != "main"
+    - if: $CI_COMMIT_TAG
+      when: never
+
+# Linting and code quality
+test:lint:
+  extends: .go_cache
+  stage: test
+  before_script:
+    - go version
+    - go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+    - export PATH=$PATH:$(go env GOPATH)/bin
+  script:
+    - echo "Running linters and formatters..."
+    - go fmt ./...
+    - go vet ./...
+    - golangci-lint run --timeout=5m
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH != "main"
+    - if: $CI_COMMIT_TAG
+      when: never
+
+# Module verification
+test:modules:
+  extends: .go_cache
+  stage: test
+  before_script:
+    - go version
+  script:
+    - echo "Verifying Go modules..."
+    - go mod verify
+    - go mod tidy
+    - |
+      if ! git diff --exit-code go.mod go.sum; then
+        echo "go.mod or go.sum need tidying. Run: go mod tidy"
+        exit 1
+      fi
+    - echo "Go modules are tidy and verified"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH != "main"
+    - if: $CI_COMMIT_TAG
+      when: never
+
+# Build verification
+test:build:
+  extends: .go_cache
+  stage: test
+  before_script:
+    - go version
+    - go mod download
+  script:
+    - echo "Building all packages..."
+    - go build -v ./...
+    - echo "Building with integration tag..."
+    - go build -tags integration -v ./...
+    - echo "All packages build successfully"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH != "main"
+    - if: $CI_COMMIT_TAG
+      when: never
+
+# Integration tests against a real SpacetimeDB server
+test:integration:
+  extends: .go_cache
+  stage: test
+  needs:
+    - test:unit
+    - test:build
+  services:
+    - name: clockworklabs/spacetime:${SPACETIMEDB_VERSION}
+      alias: spacetimedb
+  variables:
+    SPACETIMEDB_URI: "ws://spacetimedb:3000"
+    SPACETIMEDB_MODULES: "rust"
+    SPACETIMEDB_REPO_REF: ${SPACETIMEDB_VERSION}
+  before_script:
+    - go version
+    - go mod download
+    # Install Rust toolchain for compiling SpacetimeDB modules
+    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+    - export PATH="$HOME/.cargo/bin:$PATH"
+    - rustup target add wasm32-unknown-unknown
+    # Install SpacetimeDB CLI
+    - |
+      echo "Installing SpacetimeDB CLI..."
+      curl -sSf https://install.spacetimedb.com | bash -s -- --version ${SPACETIMEDB_VERSION}
+      export PATH="$HOME/.local/bin:$HOME/.local/share/spacetime/bin:$PATH"
+    # Wait for SpacetimeDB server to be ready
+    - |
+      echo "Waiting for SpacetimeDB server..."
+      for i in $(seq 1 30); do
+        if curl -sf http://spacetimedb:3000/v1/ping > /dev/null 2>&1; then
+          echo "SpacetimeDB server is ready"
+          break
+        fi
+        if [ "$i" -eq 30 ]; then
+          echo "SpacetimeDB server did not start in time"
+          exit 1
+        fi
+        sleep 2
+      done
+  script:
+    - export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$HOME/.local/share/spacetime/bin:$PATH"
+    - echo "Running integration tests against SpacetimeDB ${SPACETIMEDB_VERSION}..."
+    - go test -tags integration -v -race -count=1 -timeout 10m ./integration/...
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH != "main"
+    - if: $CI_COMMIT_TAG
+      when: never
+
+# =============================================================================
+# RELEASE STAGE
+# =============================================================================
+# Auto-tag releases when merged to main
+release:tag:
+  extends: .go_cache
+  stage: release
+  variables:
+    GIT_STRATEGY: clone
+    GIT_DEPTH: 0
+  before_script:
+    - git config --global user.email "${GITLAB_USER_EMAIL}"
+    - git config --global user.name "${GITLAB_USER_NAME}"
+    - git remote set-url origin "https://oauth2:${GL_TOKEN}@${CI_REPOSITORY_URL#*@}"
+    - git fetch --tags --prune
+    - |
+      echo "Installing SVU v3..."
+      go install github.com/caarlos0/svu/v3@latest
+      echo "Installing chglog..."
+      go install github.com/goreleaser/chglog/cmd/chglog@latest
+      export PATH=$PATH:$(go env GOPATH)/bin
+  script:
+    - |
+      export PATH=$PATH:$(go env GOPATH)/bin
+
+      echo "=============================================="
+      echo "Semantic Versioning with SVU"
+      echo "=============================================="
+      echo ""
+
+      CURRENT_VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+      echo "Current version: ${CURRENT_VERSION}"
+      git checkout main
+
+      NEXT_VERSION=$(svu next 2>/dev/null || echo "")
+
+      if [ -z "$NEXT_VERSION" ] || [ "$NEXT_VERSION" == "$CURRENT_VERSION" ]; then
+        echo "No version bump needed (current: ${CURRENT_VERSION})"
+        echo ""
+        echo "Commit messages should follow conventional commits:"
+        echo "  feat: for new features (minor version bump)"
+        echo "  fix: for bug fixes (patch version bump)"
+        echo "  BREAKING CHANGE: for breaking changes (major version bump)"
+        exit 0
+      fi
+
+      echo "Next version: ${NEXT_VERSION}"
+      echo ""
+
+      chglog add --version ${NEXT_VERSION}
+      chglog format --template repo > CHANGELOG.md
+      git add CHANGELOG.md changelog.yml
+      git commit -m "chore: update changelog"
+
+      echo "Creating tag ${NEXT_VERSION}..."
+      git tag -a "${NEXT_VERSION}" -m "Release ${NEXT_VERSION}
+
+      Auto-generated by GitLab CI
+      Pipeline: ${CI_PIPELINE_URL}
+      Commit: ${CI_COMMIT_SHA}"
+
+      echo "Pushing tag to repository..."
+      git push --atomic origin main -o ci.skip ${NEXT_VERSION}
+
+      echo "Successfully tagged release ${NEXT_VERSION}"
+  rules:
+    - if: $CI_COMMIT_TAG
+      when: never
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  allow_failure: false

@@ -1,0 +1,101 @@
+version: "3"
+
+tasks:
+  test:
+    desc: Run all tests
+    cmds:
+      - go test ./...
+
+  test:bsatn:
+    desc: Run bsatn tests
+    cmds:
+      - go test ./bsatn/...
+
+  test:types:
+    desc: Run types tests
+    cmds:
+      - go test ./types/...
+
+  test:client:
+    desc: Run client tests
+    cmds:
+      - go test ./client/...
+
+  lint:
+    desc: Run golangci-lint
+    cmds:
+      - golangci-lint run ./...
+
+  fmt:
+    desc: Format Go source files
+    cmds:
+      - gofmt -w .
+
+  vet:
+    desc: Run go vet
+    cmds:
+      - go vet ./...
+
+  tidy:
+    desc: Run go mod tidy
+    cmds:
+      - go mod tidy
+
+  build:
+    desc: Build all packages
+    cmds:
+      - go build ./...
+
+  check:
+    desc: Run fmt, vet, and tests
+    cmds:
+      - task: fmt
+      - task: vet
+      - task: test
+
+  clean:
+    desc: Clean build cache
+    cmds:
+      - go clean -cache -testcache
+
+  test:integration:
+    desc: Run integration tests (default: Rust module only, auto-clones SpacetimeDB repo)
+    env:
+      SPACETIMEDB_URI: '{{.SPACETIMEDB_URI | default "ws://localhost:3000"}}'
+      SPACETIMEDB_MODULES_PATH: '{{.SPACETIMEDB_MODULES_PATH | default ""}}'
+      SPACETIMEDB_MODULES: '{{.SPACETIMEDB_MODULES | default "rust"}}'
+    cmds:
+      - go test -tags integration -v -count=1 -timeout 10m ./integration/...
+
+  test:integration:all:
+    desc: Run integration tests against all module variants
+    env:
+      SPACETIMEDB_URI: '{{.SPACETIMEDB_URI | default "ws://localhost:3000"}}'
+      SPACETIMEDB_MODULES_PATH: '{{.SPACETIMEDB_MODULES_PATH | default ""}}'
+      SPACETIMEDB_MODULES: all
+    cmds:
+      - go test -tags integration -v -count=1 -timeout 15m ./integration/...
+
+  bench:
+    desc: Run all benchmarks (BSATN + integration)
+    env:
+      SPACETIMEDB_URI: '{{.SPACETIMEDB_URI | default "ws://localhost:3000"}}'
+      SPACETIMEDB_MODULES_PATH: '{{.SPACETIMEDB_MODULES_PATH | default ""}}'
+      BENCH_MODULES: '{{.BENCH_MODULES | default "rust"}}'
+    cmds:
+      - go test -bench=. -benchmem -count=3 ./bsatn/...
+      - go test -tags integration -bench=. -benchmem -count=3 -timeout 10m ./integration/...
+
+  bench:bsatn:
+    desc: Run BSATN serialization benchmarks (no server needed)
+    cmds:
+      - go test -bench=. -benchmem -count=5 ./bsatn/...
+
+  bench:integration:
+    desc: Run integration benchmarks against Rust and TypeScript modules
+    env:
+      SPACETIMEDB_URI: '{{.SPACETIMEDB_URI | default "ws://localhost:3000"}}'
+      SPACETIMEDB_MODULES_PATH: '{{.SPACETIMEDB_MODULES_PATH | default ""}}'
+      BENCH_MODULES: '{{.BENCH_MODULES | default "rust,typescript"}}'
+    cmds:
+      - go test -tags integration -bench=. -benchmem -run=^$ -count=3 -timeout 10m ./integration/...
