@@ -191,11 +191,11 @@ type dbConnection struct {
 	onDisconnect   func(DbConnection, error)
 
 	// State maps only accessed from the Run() goroutine event loop.
-	subscriptionCallbacks map[uint32]func()             // keyed by request_id
-	oneOffCallbacks       map[uint64]chan any            // keyed by messageID (first 8 bytes as uint64)
+	subscriptionCallbacks map[uint32]func()   // keyed by request_id
+	oneOffCallbacks       map[uint64]chan any // keyed by messageID (first 8 bytes as uint64)
 }
 
-func (c *dbConnection) Identity() types.Identity        { return c.identity }
+func (c *dbConnection) Identity() types.Identity         { return c.identity }
 func (c *dbConnection) ConnectionId() types.ConnectionId { return c.connectionID }
 func (c *dbConnection) Token() string                    { return c.token }
 func (c *dbConnection) IsActive() bool                   { return c.active.Load() }

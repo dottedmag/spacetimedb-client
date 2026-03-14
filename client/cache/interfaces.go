@@ -58,3 +58,26 @@ type TableDefWithPK interface {
 	TableDef
 	PrimaryKey(row any) any
 }
+
+// TypedTableDef defines a type-safe table definition for compile-time type safety.
+// Implement this interface for each table type in generated client code.
+type TypedTableDef[T any] interface {
+	TableName() string
+	DecodeRow(r bsatn.Reader) (T, error)
+	EncodeRow(row T) []byte
+}
+
+// TypedTableDefWithPK extends TypedTableDef for tables with a primary key.
+type TypedTableDefWithPK[T any, K comparable] interface {
+	TypedTableDef[T]
+	PrimaryKey(row T) K
+}
+
+// TypedInsertCallback is invoked when a new row is inserted, with compile-time type safety.
+type TypedInsertCallback[T any] func(row T)
+
+// TypedDeleteCallback is invoked when a row is deleted, with compile-time type safety.
+type TypedDeleteCallback[T any] func(row T)
+
+// TypedUpdateCallback is invoked when a row is updated, with compile-time type safety.
+type TypedUpdateCallback[T any] func(oldRow T, newRow T)

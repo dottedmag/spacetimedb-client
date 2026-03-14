@@ -47,9 +47,9 @@ type serverHarness struct {
 	moduleVariants []string
 
 	// runtime state
-	tempDir        string
-	ownsTempDir    bool
-	publishedDBs   []string
+	tempDir      string
+	ownsTempDir  bool
+	publishedDBs []string
 }
 
 func (h *serverHarness) WithUri(uri string) ServerHarnessBuilder {

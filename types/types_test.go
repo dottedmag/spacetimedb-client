@@ -345,7 +345,7 @@ func TestIdentityString(t *testing.T) {
 	// Display is big-endian hex, so LE bytes [0xAB, 0xCD, 0...] become "0000...00cdab"
 	assert.Equal(t,
 		"000000000000000000000000000000"+
-		"000000000000000000000000000000"+"cdab", s)
+			"000000000000000000000000000000"+"cdab", s)
 }
 
 func TestIdentityFromU64s(t *testing.T) {
@@ -439,7 +439,7 @@ func TestConnectionIdString(t *testing.T) {
 	// Display is big-endian hex, so LE bytes [0xAB, 0xCD, 0...] become "0000...cdab"
 	assert.Equal(t,
 		"0000000000000000"+
-		"000000000000"+"cdab", s)
+			"000000000000"+"cdab", s)
 }
 
 func TestConnectionIdReadBufferTooShort(t *testing.T) {
@@ -619,8 +619,8 @@ func TestScheduleAtIntervalExactBytes(t *testing.T) {
 	encoded := bsatn.Encode(sa)
 	// tag 0 + i64 LE 42
 	expected := []byte{
-		0x00,                                              // tag 0 (Interval)
-		0x2a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // i64 42
+		0x00,                                           // tag 0 (Interval)
+		0x2a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // i64 42
 	}
 	assert.Equal(t, expected, encoded)
 }
@@ -631,8 +631,8 @@ func TestScheduleAtTimeExactBytes(t *testing.T) {
 	encoded := bsatn.Encode(sa)
 	// tag 1 + i64 LE 42
 	expected := []byte{
-		0x01,                                              // tag 1 (Time)
-		0x2a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // i64 42
+		0x01,                                           // tag 1 (Time)
+		0x2a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // i64 42
 	}
 	assert.Equal(t, expected, encoded)
 }

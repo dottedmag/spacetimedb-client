@@ -1,8 +1,8 @@
 package cache
 
 import (
-	"go.digitalxero.dev/spacetimedb-client/bsatn"
 	"github.com/puzpuzpuz/xsync/v4"
+	"go.digitalxero.dev/spacetimedb-client/bsatn"
 )
 
 // ClientCache manages per-table row caches for all registered tables.
@@ -55,4 +55,19 @@ func (cc *clientCache) GetTableDef(tableName string) (TableDefWithPK, bool) {
 	}
 	pkDef, hasPK := def.(TableDefWithPK)
 	return pkDef, hasPK
+}
+
+// RegisterTypedTable registers a generic table definition and returns a typed cache handle.
+// This is the primary API for generated client code to register tables without primary keys.
+func RegisterTypedTable[T any](cc ClientCache, def TypedTableDef[T]) *TypedTableCache[T] {
+	cc.RegisterTable(TypedTableBridge[T]{Def: def})
+	return NewTypedTableCache[T](cc.GetTable(def.TableName()))
+}
+
+// RegisterTypedTableWithPK registers a generic table definition with a primary key
+// and returns a typed cache handle. Tables with primary keys support update detection
+// and fire UpdateCallback instead of separate delete+insert callbacks.
+func RegisterTypedTableWithPK[T any, K comparable](cc ClientCache, def TypedTableDefWithPK[T, K]) *TypedTableCache[T] {
+	cc.RegisterTable(TypedTableBridgeWithPK[T, K]{Def: def})
+	return NewTypedTableCache[T](cc.GetTable(def.TableName()))
 }

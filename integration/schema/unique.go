@@ -100,7 +100,9 @@ var UniqueIdentityDef cache.TableDefWithPK = newTableDefWithPK[types.Identity]("
 
 var UniqueConnectionIdDef cache.TableDefWithPK = newTableDefWithPK[types.ConnectionId]("unique_connection_id",
 	func(w bsatn.Writer, row *KeyDataRow[types.ConnectionId]) { encodeKeyData(w, row, encodeConnectionId) },
-	func(r bsatn.Reader) (*KeyDataRow[types.ConnectionId], error) { return decodeKeyData(r, decodeConnectionId) },
+	func(r bsatn.Reader) (*KeyDataRow[types.ConnectionId], error) {
+		return decodeKeyData(r, decodeConnectionId)
+	},
 	func(row *KeyDataRow[types.ConnectionId]) any { return row.Key },
 )
 

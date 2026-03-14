@@ -98,49 +98,49 @@ func (e *emptyArgs) WriteBsatn(_ bsatn.Writer) {}
 
 // --- Primitive encode/decode helpers ---
 
-func encodeU8(w bsatn.Writer, v uint8)       { w.PutU8(v) }
-func decodeU8(r bsatn.Reader) (uint8, error)  { return r.GetU8() }
-func encodeU16(w bsatn.Writer, v uint16)      { w.PutU16(v) }
-func decodeU16(r bsatn.Reader) (uint16, error) { return r.GetU16() }
-func encodeU32(w bsatn.Writer, v uint32)      { w.PutU32(v) }
-func decodeU32(r bsatn.Reader) (uint32, error) { return r.GetU32() }
-func encodeU64(w bsatn.Writer, v uint64)      { w.PutU64(v) }
-func decodeU64(r bsatn.Reader) (uint64, error) { return r.GetU64() }
-func encodeI8(w bsatn.Writer, v int8)         { w.PutI8(v) }
-func decodeI8(r bsatn.Reader) (int8, error)    { return r.GetI8() }
-func encodeI16(w bsatn.Writer, v int16)       { w.PutI16(v) }
-func decodeI16(r bsatn.Reader) (int16, error)  { return r.GetI16() }
-func encodeI32(w bsatn.Writer, v int32)       { w.PutI32(v) }
-func decodeI32(r bsatn.Reader) (int32, error)  { return r.GetI32() }
-func encodeI64(w bsatn.Writer, v int64)       { w.PutI64(v) }
-func decodeI64(r bsatn.Reader) (int64, error)  { return r.GetI64() }
-func encodeBool(w bsatn.Writer, v bool)       { w.PutBool(v) }
-func decodeBool(r bsatn.Reader) (bool, error)  { return r.GetBool() }
-func encodeF32(w bsatn.Writer, v float32)     { w.PutF32(v) }
-func decodeF32(r bsatn.Reader) (float32, error) { return r.GetF32() }
-func encodeF64(w bsatn.Writer, v float64)     { w.PutF64(v) }
-func decodeF64(r bsatn.Reader) (float64, error) { return r.GetF64() }
-func encodeString(w bsatn.Writer, v string)   { w.PutString(v) }
+func encodeU8(w bsatn.Writer, v uint8)            { w.PutU8(v) }
+func decodeU8(r bsatn.Reader) (uint8, error)      { return r.GetU8() }
+func encodeU16(w bsatn.Writer, v uint16)          { w.PutU16(v) }
+func decodeU16(r bsatn.Reader) (uint16, error)    { return r.GetU16() }
+func encodeU32(w bsatn.Writer, v uint32)          { w.PutU32(v) }
+func decodeU32(r bsatn.Reader) (uint32, error)    { return r.GetU32() }
+func encodeU64(w bsatn.Writer, v uint64)          { w.PutU64(v) }
+func decodeU64(r bsatn.Reader) (uint64, error)    { return r.GetU64() }
+func encodeI8(w bsatn.Writer, v int8)             { w.PutI8(v) }
+func decodeI8(r bsatn.Reader) (int8, error)       { return r.GetI8() }
+func encodeI16(w bsatn.Writer, v int16)           { w.PutI16(v) }
+func decodeI16(r bsatn.Reader) (int16, error)     { return r.GetI16() }
+func encodeI32(w bsatn.Writer, v int32)           { w.PutI32(v) }
+func decodeI32(r bsatn.Reader) (int32, error)     { return r.GetI32() }
+func encodeI64(w bsatn.Writer, v int64)           { w.PutI64(v) }
+func decodeI64(r bsatn.Reader) (int64, error)     { return r.GetI64() }
+func encodeBool(w bsatn.Writer, v bool)           { w.PutBool(v) }
+func decodeBool(r bsatn.Reader) (bool, error)     { return r.GetBool() }
+func encodeF32(w bsatn.Writer, v float32)         { w.PutF32(v) }
+func decodeF32(r bsatn.Reader) (float32, error)   { return r.GetF32() }
+func encodeF64(w bsatn.Writer, v float64)         { w.PutF64(v) }
+func decodeF64(r bsatn.Reader) (float64, error)   { return r.GetF64() }
+func encodeString(w bsatn.Writer, v string)       { w.PutString(v) }
 func decodeString(r bsatn.Reader) (string, error) { return r.GetString() }
 
-func encodeIdentity(w bsatn.Writer, v types.Identity)         { v.WriteBsatn(w) }
-func decodeIdentity(r bsatn.Reader) (types.Identity, error)    { return types.ReadIdentity(r) }
-func encodeConnectionId(w bsatn.Writer, v types.ConnectionId)  { v.WriteBsatn(w) }
+func encodeIdentity(w bsatn.Writer, v types.Identity)               { v.WriteBsatn(w) }
+func decodeIdentity(r bsatn.Reader) (types.Identity, error)         { return types.ReadIdentity(r) }
+func encodeConnectionId(w bsatn.Writer, v types.ConnectionId)       { v.WriteBsatn(w) }
 func decodeConnectionId(r bsatn.Reader) (types.ConnectionId, error) { return types.ReadConnectionId(r) }
-func encodeUuid(w bsatn.Writer, v types.Uuid)                 { v.WriteBsatn(w) }
-func decodeUuid(r bsatn.Reader) (types.Uuid, error)            { return types.ReadUuid(r) }
-func encodeTimestamp(w bsatn.Writer, v types.Timestamp)            { v.WriteBsatn(w) }
-func decodeTimestamp(r bsatn.Reader) (types.Timestamp, error)     { return types.ReadTimestamp(r) }
-func encodeTimeDuration(w bsatn.Writer, v types.TimeDuration)     { v.WriteBsatn(w) }
+func encodeUuid(w bsatn.Writer, v types.Uuid)                       { v.WriteBsatn(w) }
+func decodeUuid(r bsatn.Reader) (types.Uuid, error)                 { return types.ReadUuid(r) }
+func encodeTimestamp(w bsatn.Writer, v types.Timestamp)             { v.WriteBsatn(w) }
+func decodeTimestamp(r bsatn.Reader) (types.Timestamp, error)       { return types.ReadTimestamp(r) }
+func encodeTimeDuration(w bsatn.Writer, v types.TimeDuration)       { v.WriteBsatn(w) }
 func decodeTimeDuration(r bsatn.Reader) (types.TimeDuration, error) { return types.ReadTimeDuration(r) }
-func encodeUint128(w bsatn.Writer, v types.Uint128)            { v.WriteBsatn(w) }
-func decodeUint128(r bsatn.Reader) (types.Uint128, error)       { return types.ReadUint128(r) }
-func encodeInt128(w bsatn.Writer, v types.Int128)              { v.WriteBsatn(w) }
-func decodeInt128(r bsatn.Reader) (types.Int128, error)         { return types.ReadInt128(r) }
-func encodeUint256(w bsatn.Writer, v types.Uint256)            { v.WriteBsatn(w) }
-func decodeUint256(r bsatn.Reader) (types.Uint256, error)       { return types.ReadUint256(r) }
-func encodeInt256(w bsatn.Writer, v types.Int256)              { v.WriteBsatn(w) }
-func decodeInt256(r bsatn.Reader) (types.Int256, error)         { return types.ReadInt256(r) }
+func encodeUint128(w bsatn.Writer, v types.Uint128)                 { v.WriteBsatn(w) }
+func decodeUint128(r bsatn.Reader) (types.Uint128, error)           { return types.ReadUint128(r) }
+func encodeInt128(w bsatn.Writer, v types.Int128)                   { v.WriteBsatn(w) }
+func decodeInt128(r bsatn.Reader) (types.Int128, error)             { return types.ReadInt128(r) }
+func encodeUint256(w bsatn.Writer, v types.Uint256)                 { v.WriteBsatn(w) }
+func decodeUint256(r bsatn.Reader) (types.Uint256, error)           { return types.ReadUint256(r) }
+func encodeInt256(w bsatn.Writer, v types.Int256)                   { v.WriteBsatn(w) }
+func decodeInt256(r bsatn.Reader) (types.Int256, error)             { return types.ReadInt256(r) }
 
 // --- Row encode/decode helpers ---
 

@@ -6,14 +6,15 @@ import "go.digitalxero.dev/spacetimedb-client/bsatn"
 // It is a BSATN sum type with variants for each message kind.
 //
 // v1 ClientMessage enum:
-//   Tag 0: CallReducer { reducer, args, request_id, flags }
-//   Tag 1: Subscribe { query_strings, request_id }
-//   Tag 2: OneOffQuery { message_id, query_string }
-//   Tag 3: SubscribeSingle { query, request_id, query_id }
-//   Tag 4: SubscribeMulti { query_strings, request_id, query_id }
-//   Tag 5: Unsubscribe { request_id, query_id }
-//   Tag 6: UnsubscribeMulti { request_id, query_id }
-//   Tag 7: CallProcedure { procedure, args, request_id, flags }
+//
+//	Tag 0: CallReducer { reducer, args, request_id, flags }
+//	Tag 1: Subscribe { query_strings, request_id }
+//	Tag 2: OneOffQuery { message_id, query_string }
+//	Tag 3: SubscribeSingle { query, request_id, query_id }
+//	Tag 4: SubscribeMulti { query_strings, request_id, query_id }
+//	Tag 5: Unsubscribe { request_id, query_id }
+//	Tag 6: UnsubscribeMulti { request_id, query_id }
+//	Tag 7: CallProcedure { procedure, args, request_id, flags }
 type ClientMessage interface {
 	bsatn.Serializable
 	clientMessageTag() uint8

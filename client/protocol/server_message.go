@@ -156,10 +156,10 @@ type V1OneOffTable struct {
 
 // SubscribeMultiApplied is sent in response to a SubscribeMulti message (tag 8 in v1).
 type SubscribeMultiApplied struct {
-	RequestID  uint32
-	Duration   uint64
-	QueryID    uint32
-	Update     V1DatabaseUpdate
+	RequestID uint32
+	Duration  uint64
+	QueryID   uint32
+	Update    V1DatabaseUpdate
 }
 
 func (*SubscribeMultiApplied) serverMessageTag() uint8 { return 8 }

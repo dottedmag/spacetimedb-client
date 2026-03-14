@@ -3,9 +3,9 @@ package ws_test
 import (
 	"testing"
 
-	"go.digitalxero.dev/spacetimedb-client/client/ws"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.digitalxero.dev/spacetimedb-client/client/ws"
 )
 
 func TestNewConnection_ReturnsBuilder(t *testing.T) {

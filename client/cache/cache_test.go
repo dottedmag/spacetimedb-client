@@ -4,10 +4,10 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"go.digitalxero.dev/spacetimedb-client/bsatn"
-	"go.digitalxero.dev/spacetimedb-client/client/cache"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.digitalxero.dev/spacetimedb-client/bsatn"
+	"go.digitalxero.dev/spacetimedb-client/client/cache"
 )
 
 // testRow is a simple row type for testing.
@@ -558,6 +558,191 @@ func TestClientCache_ConcurrentRegisterAndGet(t *testing.T) {
 		name := "table_" + string(rune('A'+i%26)) + string(rune('0'+i/26))
 		assert.NotNil(t, cc.GetTable(name), "table %s should be registered", name)
 	}
+}
+
+// --- Typed (generic) API tests ---
+
+// typedTestTableDef implements cache.TypedTableDef for testing.
+type typedTestTableDef struct {
+	name string
+}
+
+func (d *typedTestTableDef) TableName() string { return d.name }
+
+func (d *typedTestTableDef) DecodeRow(r bsatn.Reader) (*testRow, error) {
+	id, err := r.GetU32()
+	if err != nil {
+		return nil, err
+	}
+	name, err := r.GetString()
+	if err != nil {
+		return nil, err
+	}
+	return &testRow{ID: id, Name: name}, nil
+}
+
+func (d *typedTestTableDef) EncodeRow(row *testRow) []byte {
+	w := bsatn.NewWriter(32)
+	w.PutU32(row.ID)
+	w.PutString(row.Name)
+	return w.Bytes()
+}
+
+// typedTestTableDefWithPK implements cache.TypedTableDefWithPK for testing.
+type typedTestTableDefWithPK struct {
+	typedTestTableDef
+}
+
+func (d *typedTestTableDefWithPK) PrimaryKey(row *testRow) uint32 {
+	return row.ID
+}
+
+func TestRegisterTypedTable(t *testing.T) {
+	cc := cache.NewClientCache()
+	def := &typedTestTableDef{name: "typed_users"}
+
+	tc := cache.RegisterTypedTable[*testRow](cc, def)
+	require.NotNil(t, tc)
+	assert.Equal(t, 0, tc.Count())
+
+	// Verify underlying table was registered
+	assert.NotNil(t, cc.GetTable("typed_users"))
+}
+
+func TestRegisterTypedTableWithPK(t *testing.T) {
+	cc := cache.NewClientCache()
+	def := &typedTestTableDefWithPK{typedTestTableDef: typedTestTableDef{name: "typed_pk_users"}}
+
+	tc := cache.RegisterTypedTableWithPK[*testRow, uint32](cc, def)
+	require.NotNil(t, tc)
+	assert.Equal(t, 0, tc.Count())
+
+	// Verify PK support
+	pkDef, hasPK := cc.GetTableDef("typed_pk_users")
+	assert.True(t, hasPK)
+	require.NotNil(t, pkDef)
+}
+
+func TestTypedTableCache_InsertAndIter(t *testing.T) {
+	cc := cache.NewClientCache()
+	def := &typedTestTableDef{name: "typed_items"}
+	tc := cache.RegisterTypedTable[*testRow](cc, def)
+
+	// Insert via underlying cache
+	underlying := cc.GetTable("typed_items")
+	rowBytes := encodeTestRow(1, "sword")
+	row, err := decodeRow(&testTableDef{name: "typed_items"}, rowBytes)
+	require.NoError(t, err)
+	underlying.ApplyInsert(rowBytes, row)
+
+	assert.Equal(t, 1, tc.Count())
+
+	// Typed iteration - no type assertion needed
+	var found *testRow
+	tc.Iter(func(row *testRow) bool {
+		found = row
+		return false
+	})
+	require.NotNil(t, found)
+	assert.Equal(t, uint32(1), found.ID)
+	assert.Equal(t, "sword", found.Name)
+}
+
+func TestTypedTableCache_OnInsertCallback(t *testing.T) {
+	cc := cache.NewClientCache()
+	def := &typedTestTableDef{name: "typed_cb"}
+	tc := cache.RegisterTypedTable[*testRow](cc, def)
+
+	var inserted *testRow
+	tc.OnInsert(func(row *testRow) {
+		inserted = row
+	})
+
+	underlying := cc.GetTable("typed_cb")
+	rowBytes := encodeTestRow(42, "alice")
+	row, err := decodeRow(&testTableDef{name: "typed_cb"}, rowBytes)
+	require.NoError(t, err)
+	underlying.ApplyInsert(rowBytes, row)
+
+	require.NotNil(t, inserted)
+	assert.Equal(t, uint32(42), inserted.ID)
+	assert.Equal(t, "alice", inserted.Name)
+}
+
+func TestTypedTableCache_OnDeleteCallback(t *testing.T) {
+	cc := cache.NewClientCache()
+	def := &typedTestTableDef{name: "typed_del"}
+	tc := cache.RegisterTypedTable[*testRow](cc, def)
+
+	var deleted *testRow
+	tc.OnDelete(func(row *testRow) {
+		deleted = row
+	})
+
+	underlying := cc.GetTable("typed_del")
+	rowBytes := encodeTestRow(1, "bob")
+	row, err := decodeRow(&testTableDef{name: "typed_del"}, rowBytes)
+	require.NoError(t, err)
+	underlying.ApplyInsert(rowBytes, row)
+	underlying.ApplyDelete(rowBytes, row)
+
+	require.NotNil(t, deleted)
+	assert.Equal(t, uint32(1), deleted.ID)
+}
+
+func TestTypedTableCache_OnUpdateCallback(t *testing.T) {
+	cc := cache.NewClientCache()
+	def := &typedTestTableDef{name: "typed_upd"}
+	tc := cache.RegisterTypedTable[*testRow](cc, def)
+
+	var oldRow, newRow *testRow
+	tc.OnUpdate(func(old *testRow, new *testRow) {
+		oldRow = old
+		newRow = new
+	})
+
+	underlying := cc.GetTable("typed_upd")
+	oldBytes := encodeTestRow(1, "before")
+	old, err := decodeRow(&testTableDef{name: "typed_upd"}, oldBytes)
+	require.NoError(t, err)
+	underlying.ApplyInsert(oldBytes, old)
+
+	newBytes := encodeTestRow(1, "after")
+	newVal, err := decodeRow(&testTableDef{name: "typed_upd"}, newBytes)
+	require.NoError(t, err)
+	underlying.ApplyUpdate(oldBytes, old, newBytes, newVal)
+
+	require.NotNil(t, oldRow)
+	require.NotNil(t, newRow)
+	assert.Equal(t, "before", oldRow.Name)
+	assert.Equal(t, "after", newRow.Name)
+}
+
+func TestTypedTableCache_RemoveCallback(t *testing.T) {
+	cc := cache.NewClientCache()
+	def := &typedTestTableDef{name: "typed_rm"}
+	tc := cache.RegisterTypedTable[*testRow](cc, def)
+
+	callCount := 0
+	cbID := tc.OnInsert(func(row *testRow) {
+		callCount++
+	})
+
+	underlying := cc.GetTable("typed_rm")
+
+	rowBytes := encodeTestRow(1, "alice")
+	row, err := decodeRow(&testTableDef{name: "typed_rm"}, rowBytes)
+	require.NoError(t, err)
+	underlying.ApplyInsert(rowBytes, row)
+	assert.Equal(t, 1, callCount)
+
+	tc.RemoveCallback(cbID)
+
+	row2Bytes := encodeTestRow(2, "bob")
+	row2, err := decodeRow(&testTableDef{name: "typed_rm"}, row2Bytes)
+	require.NoError(t, err)
+	underlying.ApplyInsert(row2Bytes, row2)
+	assert.Equal(t, 1, callCount, "callback should not fire after removal")
 }
 
 func TestTableCache_ConcurrentCallbackRegistration(t *testing.T) {

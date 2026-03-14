@@ -70,31 +70,31 @@ type enumByteStruct struct{ V *ByteStruct }
 type enumEveryPrimitiveStruct struct{ V *EveryPrimitiveStruct }
 type enumEveryVecStruct struct{ V *EveryVecStruct }
 
-func (e *enumU8) enumWithPayloadTag() uint8                  { return 0 }
-func (e *enumU16) enumWithPayloadTag() uint8                 { return 1 }
-func (e *enumU32) enumWithPayloadTag() uint8                 { return 2 }
-func (e *enumU64) enumWithPayloadTag() uint8                 { return 3 }
-func (e *enumU128) enumWithPayloadTag() uint8                { return 4 }
-func (e *enumU256) enumWithPayloadTag() uint8                { return 5 }
-func (e *enumI8) enumWithPayloadTag() uint8                  { return 6 }
-func (e *enumI16) enumWithPayloadTag() uint8                 { return 7 }
-func (e *enumI32) enumWithPayloadTag() uint8                 { return 8 }
-func (e *enumI64) enumWithPayloadTag() uint8                 { return 9 }
-func (e *enumI128) enumWithPayloadTag() uint8                { return 10 }
-func (e *enumI256) enumWithPayloadTag() uint8                { return 11 }
-func (e *enumBool) enumWithPayloadTag() uint8                { return 12 }
-func (e *enumF32) enumWithPayloadTag() uint8                 { return 13 }
-func (e *enumF64) enumWithPayloadTag() uint8                 { return 14 }
-func (e *enumString) enumWithPayloadTag() uint8              { return 15 }
-func (e *enumIdentity) enumWithPayloadTag() uint8            { return 16 }
-func (e *enumConnectionId) enumWithPayloadTag() uint8        { return 17 }
-func (e *enumUuid) enumWithPayloadTag() uint8                { return 18 }
-func (e *enumTimestamp) enumWithPayloadTag() uint8           { return 19 }
-func (e *enumSimpleEnum) enumWithPayloadTag() uint8          { return 20 }
-func (e *enumUnitStruct) enumWithPayloadTag() uint8          { return 21 }
-func (e *enumByteStruct) enumWithPayloadTag() uint8          { return 22 }
+func (e *enumU8) enumWithPayloadTag() uint8                   { return 0 }
+func (e *enumU16) enumWithPayloadTag() uint8                  { return 1 }
+func (e *enumU32) enumWithPayloadTag() uint8                  { return 2 }
+func (e *enumU64) enumWithPayloadTag() uint8                  { return 3 }
+func (e *enumU128) enumWithPayloadTag() uint8                 { return 4 }
+func (e *enumU256) enumWithPayloadTag() uint8                 { return 5 }
+func (e *enumI8) enumWithPayloadTag() uint8                   { return 6 }
+func (e *enumI16) enumWithPayloadTag() uint8                  { return 7 }
+func (e *enumI32) enumWithPayloadTag() uint8                  { return 8 }
+func (e *enumI64) enumWithPayloadTag() uint8                  { return 9 }
+func (e *enumI128) enumWithPayloadTag() uint8                 { return 10 }
+func (e *enumI256) enumWithPayloadTag() uint8                 { return 11 }
+func (e *enumBool) enumWithPayloadTag() uint8                 { return 12 }
+func (e *enumF32) enumWithPayloadTag() uint8                  { return 13 }
+func (e *enumF64) enumWithPayloadTag() uint8                  { return 14 }
+func (e *enumString) enumWithPayloadTag() uint8               { return 15 }
+func (e *enumIdentity) enumWithPayloadTag() uint8             { return 16 }
+func (e *enumConnectionId) enumWithPayloadTag() uint8         { return 17 }
+func (e *enumUuid) enumWithPayloadTag() uint8                 { return 18 }
+func (e *enumTimestamp) enumWithPayloadTag() uint8            { return 19 }
+func (e *enumSimpleEnum) enumWithPayloadTag() uint8           { return 20 }
+func (e *enumUnitStruct) enumWithPayloadTag() uint8           { return 21 }
+func (e *enumByteStruct) enumWithPayloadTag() uint8           { return 22 }
 func (e *enumEveryPrimitiveStruct) enumWithPayloadTag() uint8 { return 23 }
-func (e *enumEveryVecStruct) enumWithPayloadTag() uint8      { return 24 }
+func (e *enumEveryVecStruct) enumWithPayloadTag() uint8       { return 24 }
 
 func (e *enumU8) WriteBsatn(w bsatn.Writer)   { w.PutSumTag(0); w.PutU8(e.V) }
 func (e *enumU16) WriteBsatn(w bsatn.Writer)  { w.PutSumTag(1); w.PutU16(e.V) }
@@ -152,31 +152,33 @@ func (e *enumEveryVecStruct) WriteBsatn(w bsatn.Writer) {
 }
 
 // Constructors for EnumWithPayload variants.
-func NewEnumU8(v uint8) EnumWithPayload                                   { return &enumU8{V: v} }
-func NewEnumU16(v uint16) EnumWithPayload                                 { return &enumU16{V: v} }
-func NewEnumU32(v uint32) EnumWithPayload                                 { return &enumU32{V: v} }
-func NewEnumU64(v uint64) EnumWithPayload                                 { return &enumU64{V: v} }
-func NewEnumU128(v types.Uint128) EnumWithPayload                         { return &enumU128{V: v} }
-func NewEnumU256(v types.Uint256) EnumWithPayload                         { return &enumU256{V: v} }
-func NewEnumI8(v int8) EnumWithPayload                                    { return &enumI8{V: v} }
-func NewEnumI16(v int16) EnumWithPayload                                  { return &enumI16{V: v} }
-func NewEnumI32(v int32) EnumWithPayload                                  { return &enumI32{V: v} }
-func NewEnumI64(v int64) EnumWithPayload                                  { return &enumI64{V: v} }
-func NewEnumI128(v types.Int128) EnumWithPayload                          { return &enumI128{V: v} }
-func NewEnumI256(v types.Int256) EnumWithPayload                          { return &enumI256{V: v} }
-func NewEnumBool(v bool) EnumWithPayload                                  { return &enumBool{V: v} }
-func NewEnumF32(v float32) EnumWithPayload                                { return &enumF32{V: v} }
-func NewEnumF64(v float64) EnumWithPayload                                { return &enumF64{V: v} }
-func NewEnumString(v string) EnumWithPayload                              { return &enumString{V: v} }
-func NewEnumIdentity(v types.Identity) EnumWithPayload                    { return &enumIdentity{V: v} }
-func NewEnumConnectionId(v types.ConnectionId) EnumWithPayload            { return &enumConnectionId{V: v} }
-func NewEnumUuid(v types.Uuid) EnumWithPayload                            { return &enumUuid{V: v} }
-func NewEnumTimestamp(v types.Timestamp) EnumWithPayload                  { return &enumTimestamp{V: v} }
-func NewEnumSimpleEnum(v SimpleEnum) EnumWithPayload                      { return &enumSimpleEnum{V: v} }
-func NewEnumUnitStruct() EnumWithPayload                                  { return &enumUnitStruct{} }
-func NewEnumByteStruct(v *ByteStruct) EnumWithPayload                     { return &enumByteStruct{V: v} }
-func NewEnumEveryPrimitiveStruct(v *EveryPrimitiveStruct) EnumWithPayload { return &enumEveryPrimitiveStruct{V: v} }
-func NewEnumEveryVecStruct(v *EveryVecStruct) EnumWithPayload             { return &enumEveryVecStruct{V: v} }
+func NewEnumU8(v uint8) EnumWithPayload                        { return &enumU8{V: v} }
+func NewEnumU16(v uint16) EnumWithPayload                      { return &enumU16{V: v} }
+func NewEnumU32(v uint32) EnumWithPayload                      { return &enumU32{V: v} }
+func NewEnumU64(v uint64) EnumWithPayload                      { return &enumU64{V: v} }
+func NewEnumU128(v types.Uint128) EnumWithPayload              { return &enumU128{V: v} }
+func NewEnumU256(v types.Uint256) EnumWithPayload              { return &enumU256{V: v} }
+func NewEnumI8(v int8) EnumWithPayload                         { return &enumI8{V: v} }
+func NewEnumI16(v int16) EnumWithPayload                       { return &enumI16{V: v} }
+func NewEnumI32(v int32) EnumWithPayload                       { return &enumI32{V: v} }
+func NewEnumI64(v int64) EnumWithPayload                       { return &enumI64{V: v} }
+func NewEnumI128(v types.Int128) EnumWithPayload               { return &enumI128{V: v} }
+func NewEnumI256(v types.Int256) EnumWithPayload               { return &enumI256{V: v} }
+func NewEnumBool(v bool) EnumWithPayload                       { return &enumBool{V: v} }
+func NewEnumF32(v float32) EnumWithPayload                     { return &enumF32{V: v} }
+func NewEnumF64(v float64) EnumWithPayload                     { return &enumF64{V: v} }
+func NewEnumString(v string) EnumWithPayload                   { return &enumString{V: v} }
+func NewEnumIdentity(v types.Identity) EnumWithPayload         { return &enumIdentity{V: v} }
+func NewEnumConnectionId(v types.ConnectionId) EnumWithPayload { return &enumConnectionId{V: v} }
+func NewEnumUuid(v types.Uuid) EnumWithPayload                 { return &enumUuid{V: v} }
+func NewEnumTimestamp(v types.Timestamp) EnumWithPayload       { return &enumTimestamp{V: v} }
+func NewEnumSimpleEnum(v SimpleEnum) EnumWithPayload           { return &enumSimpleEnum{V: v} }
+func NewEnumUnitStruct() EnumWithPayload                       { return &enumUnitStruct{} }
+func NewEnumByteStruct(v *ByteStruct) EnumWithPayload          { return &enumByteStruct{V: v} }
+func NewEnumEveryPrimitiveStruct(v *EveryPrimitiveStruct) EnumWithPayload {
+	return &enumEveryPrimitiveStruct{V: v}
+}
+func NewEnumEveryVecStruct(v *EveryVecStruct) EnumWithPayload { return &enumEveryVecStruct{V: v} }
 
 // ReadEnumWithPayload reads an EnumWithPayload from a BSATN reader.
 func ReadEnumWithPayload(r bsatn.Reader) (EnumWithPayload, error) {

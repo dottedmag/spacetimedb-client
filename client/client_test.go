@@ -5,11 +5,11 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.digitalxero.dev/spacetimedb-client/client"
 	"go.digitalxero.dev/spacetimedb-client/client/protocol"
 	"go.digitalxero.dev/spacetimedb-client/types"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // --- Error types tests ---

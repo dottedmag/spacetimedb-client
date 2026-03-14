@@ -7,10 +7,10 @@ import (
 	"testing"
 
 	"github.com/andybalholm/brotli"
-	"go.digitalxero.dev/spacetimedb-client/bsatn"
-	"go.digitalxero.dev/spacetimedb-client/client/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.digitalxero.dev/spacetimedb-client/bsatn"
+	"go.digitalxero.dev/spacetimedb-client/client/protocol"
 )
 
 // --- ClientMessage encoding tests ---
@@ -453,10 +453,10 @@ func TestReadServerMessage_V1TransactionUpdateLight_WithTables(t *testing.T) {
 	// V1DatabaseUpdate: 1 table
 	w.PutArrayLen(1)
 	// V1TableUpdate: table_id, table_name, num_rows, updates
-	w.PutU32(1)              // table_id
-	w.PutString("players")   // table_name
-	w.PutU64(10)             // num_rows
-	w.PutArrayLen(1)         // 1 CompressableQueryUpdate
+	w.PutU32(1)            // table_id
+	w.PutString("players") // table_name
+	w.PutU64(10)           // num_rows
+	w.PutArrayLen(1)       // 1 CompressableQueryUpdate
 	// Uncompressed: tag=0, deletes + inserts
 	w.PutSumTag(0)
 	// deletes: empty BsatnRowList

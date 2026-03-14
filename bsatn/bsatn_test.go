@@ -731,20 +731,20 @@ func TestSequentialWriteMultipleValues(t *testing.T) {
 	w.PutString("test")
 
 	expected := []byte{
-		0x01,                         // bool true
-		0x2a, 0x00, 0x00, 0x00,      // u32 42
-		0x04, 0x00, 0x00, 0x00,      // string length 4
-		't', 'e', 's', 't',          // string "test"
+		0x01,                   // bool true
+		0x2a, 0x00, 0x00, 0x00, // u32 42
+		0x04, 0x00, 0x00, 0x00, // string length 4
+		't', 'e', 's', 't', // string "test"
 	}
 	assert.Equal(t, expected, w.Bytes())
 }
 
 func TestSequentialReadMultipleValues(t *testing.T) {
 	data := []byte{
-		0x01,                         // bool true
-		0x2a, 0x00, 0x00, 0x00,      // u32 42
-		0x04, 0x00, 0x00, 0x00,      // string length 4
-		't', 'e', 's', 't',          // string "test"
+		0x01,                   // bool true
+		0x2a, 0x00, 0x00, 0x00, // u32 42
+		0x04, 0x00, 0x00, 0x00, // string length 4
+		't', 'e', 's', 't', // string "test"
 	}
 	r := bsatn.NewReader(data)
 

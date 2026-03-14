@@ -7,22 +7,22 @@ import (
 
 // --- Insert args for One* tables (single value) ---
 
-func InsertOneU8Args(v uint8) bsatn.Serializable              { return newArgs(v, encodeU8) }
-func InsertOneU16Args(v uint16) bsatn.Serializable             { return newArgs(v, encodeU16) }
-func InsertOneU32Args(v uint32) bsatn.Serializable             { return newArgs(v, encodeU32) }
-func InsertOneU64Args(v uint64) bsatn.Serializable             { return newArgs(v, encodeU64) }
-func InsertOneU128Args(v types.Uint128) bsatn.Serializable     { return newArgs(v, encodeUint128) }
-func InsertOneU256Args(v types.Uint256) bsatn.Serializable     { return newArgs(v, encodeUint256) }
-func InsertOneI8Args(v int8) bsatn.Serializable                { return newArgs(v, encodeI8) }
-func InsertOneI16Args(v int16) bsatn.Serializable              { return newArgs(v, encodeI16) }
-func InsertOneI32Args(v int32) bsatn.Serializable              { return newArgs(v, encodeI32) }
-func InsertOneI64Args(v int64) bsatn.Serializable              { return newArgs(v, encodeI64) }
-func InsertOneI128Args(v types.Int128) bsatn.Serializable      { return newArgs(v, encodeInt128) }
-func InsertOneI256Args(v types.Int256) bsatn.Serializable      { return newArgs(v, encodeInt256) }
-func InsertOneBoolArgs(v bool) bsatn.Serializable              { return newArgs(v, encodeBool) }
-func InsertOneF32Args(v float32) bsatn.Serializable            { return newArgs(v, encodeF32) }
-func InsertOneF64Args(v float64) bsatn.Serializable            { return newArgs(v, encodeF64) }
-func InsertOneStringArgs(v string) bsatn.Serializable          { return newArgs(v, encodeString) }
+func InsertOneU8Args(v uint8) bsatn.Serializable                { return newArgs(v, encodeU8) }
+func InsertOneU16Args(v uint16) bsatn.Serializable              { return newArgs(v, encodeU16) }
+func InsertOneU32Args(v uint32) bsatn.Serializable              { return newArgs(v, encodeU32) }
+func InsertOneU64Args(v uint64) bsatn.Serializable              { return newArgs(v, encodeU64) }
+func InsertOneU128Args(v types.Uint128) bsatn.Serializable      { return newArgs(v, encodeUint128) }
+func InsertOneU256Args(v types.Uint256) bsatn.Serializable      { return newArgs(v, encodeUint256) }
+func InsertOneI8Args(v int8) bsatn.Serializable                 { return newArgs(v, encodeI8) }
+func InsertOneI16Args(v int16) bsatn.Serializable               { return newArgs(v, encodeI16) }
+func InsertOneI32Args(v int32) bsatn.Serializable               { return newArgs(v, encodeI32) }
+func InsertOneI64Args(v int64) bsatn.Serializable               { return newArgs(v, encodeI64) }
+func InsertOneI128Args(v types.Int128) bsatn.Serializable       { return newArgs(v, encodeInt128) }
+func InsertOneI256Args(v types.Int256) bsatn.Serializable       { return newArgs(v, encodeInt256) }
+func InsertOneBoolArgs(v bool) bsatn.Serializable               { return newArgs(v, encodeBool) }
+func InsertOneF32Args(v float32) bsatn.Serializable             { return newArgs(v, encodeF32) }
+func InsertOneF64Args(v float64) bsatn.Serializable             { return newArgs(v, encodeF64) }
+func InsertOneStringArgs(v string) bsatn.Serializable           { return newArgs(v, encodeString) }
 func InsertOneIdentityArgs(v types.Identity) bsatn.Serializable { return newArgs(v, encodeIdentity) }
 func InsertOneConnectionIdArgs(v types.ConnectionId) bsatn.Serializable {
 	return newArgs(v, encodeConnectionId)
@@ -152,8 +152,8 @@ func InsertVecEveryVecStructArgs(v []*EveryVecStruct) bsatn.Serializable {
 // --- No-arg reducer args ---
 
 func InsertCallerOneIdentityArgs() bsatn.Serializable { return &emptyArgs{} }
-func InsertCallTimestampArgs() bsatn.Serializable      { return &emptyArgs{} }
-func InsertCallUuidV4Args() bsatn.Serializable         { return &emptyArgs{} }
+func InsertCallTimestampArgs() bsatn.Serializable     { return &emptyArgs{} }
+func InsertCallUuidV4Args() bsatn.Serializable        { return &emptyArgs{} }
 
 // --- Insert args for Unique* tables (key + data) ---
 
@@ -222,21 +222,23 @@ func InsertUniqueUuidArgs(key types.Uuid, data int32) bsatn.Serializable {
 
 // --- Delete args for Unique* tables (key only) ---
 
-func DeleteUniqueU8Args(key uint8) bsatn.Serializable              { return newArgs(key, encodeU8) }
-func DeleteUniqueU16Args(key uint16) bsatn.Serializable             { return newArgs(key, encodeU16) }
-func DeleteUniqueU32Args(key uint32) bsatn.Serializable             { return newArgs(key, encodeU32) }
-func DeleteUniqueU64Args(key uint64) bsatn.Serializable             { return newArgs(key, encodeU64) }
-func DeleteUniqueU128Args(key types.Uint128) bsatn.Serializable     { return newArgs(key, encodeUint128) }
-func DeleteUniqueU256Args(key types.Uint256) bsatn.Serializable     { return newArgs(key, encodeUint256) }
-func DeleteUniqueI8Args(key int8) bsatn.Serializable                { return newArgs(key, encodeI8) }
-func DeleteUniqueI16Args(key int16) bsatn.Serializable              { return newArgs(key, encodeI16) }
-func DeleteUniqueI32Args(key int32) bsatn.Serializable              { return newArgs(key, encodeI32) }
-func DeleteUniqueI64Args(key int64) bsatn.Serializable              { return newArgs(key, encodeI64) }
-func DeleteUniqueI128Args(key types.Int128) bsatn.Serializable      { return newArgs(key, encodeInt128) }
-func DeleteUniqueI256Args(key types.Int256) bsatn.Serializable      { return newArgs(key, encodeInt256) }
-func DeleteUniqueBoolArgs(key bool) bsatn.Serializable              { return newArgs(key, encodeBool) }
-func DeleteUniqueStringArgs(key string) bsatn.Serializable          { return newArgs(key, encodeString) }
-func DeleteUniqueIdentityArgs(key types.Identity) bsatn.Serializable { return newArgs(key, encodeIdentity) }
+func DeleteUniqueU8Args(key uint8) bsatn.Serializable           { return newArgs(key, encodeU8) }
+func DeleteUniqueU16Args(key uint16) bsatn.Serializable         { return newArgs(key, encodeU16) }
+func DeleteUniqueU32Args(key uint32) bsatn.Serializable         { return newArgs(key, encodeU32) }
+func DeleteUniqueU64Args(key uint64) bsatn.Serializable         { return newArgs(key, encodeU64) }
+func DeleteUniqueU128Args(key types.Uint128) bsatn.Serializable { return newArgs(key, encodeUint128) }
+func DeleteUniqueU256Args(key types.Uint256) bsatn.Serializable { return newArgs(key, encodeUint256) }
+func DeleteUniqueI8Args(key int8) bsatn.Serializable            { return newArgs(key, encodeI8) }
+func DeleteUniqueI16Args(key int16) bsatn.Serializable          { return newArgs(key, encodeI16) }
+func DeleteUniqueI32Args(key int32) bsatn.Serializable          { return newArgs(key, encodeI32) }
+func DeleteUniqueI64Args(key int64) bsatn.Serializable          { return newArgs(key, encodeI64) }
+func DeleteUniqueI128Args(key types.Int128) bsatn.Serializable  { return newArgs(key, encodeInt128) }
+func DeleteUniqueI256Args(key types.Int256) bsatn.Serializable  { return newArgs(key, encodeInt256) }
+func DeleteUniqueBoolArgs(key bool) bsatn.Serializable          { return newArgs(key, encodeBool) }
+func DeleteUniqueStringArgs(key string) bsatn.Serializable      { return newArgs(key, encodeString) }
+func DeleteUniqueIdentityArgs(key types.Identity) bsatn.Serializable {
+	return newArgs(key, encodeIdentity)
+}
 func DeleteUniqueConnectionIdArgs(key types.ConnectionId) bsatn.Serializable {
 	return newArgs(key, encodeConnectionId)
 }
@@ -355,26 +357,26 @@ func InsertPkSimpleEnumArgs(key SimpleEnum, data int32) bsatn.Serializable {
 
 // --- Delete args for Pk* tables (key only) ---
 
-func DeletePkU8Args(key uint8) bsatn.Serializable              { return newArgs(key, encodeU8) }
-func DeletePkU16Args(key uint16) bsatn.Serializable             { return newArgs(key, encodeU16) }
-func DeletePkU32Args(key uint32) bsatn.Serializable             { return newArgs(key, encodeU32) }
-func DeletePkU64Args(key uint64) bsatn.Serializable             { return newArgs(key, encodeU64) }
-func DeletePkU128Args(key types.Uint128) bsatn.Serializable     { return newArgs(key, encodeUint128) }
-func DeletePkU256Args(key types.Uint256) bsatn.Serializable     { return newArgs(key, encodeUint256) }
-func DeletePkI8Args(key int8) bsatn.Serializable                { return newArgs(key, encodeI8) }
-func DeletePkI16Args(key int16) bsatn.Serializable              { return newArgs(key, encodeI16) }
-func DeletePkI32Args(key int32) bsatn.Serializable              { return newArgs(key, encodeI32) }
-func DeletePkI64Args(key int64) bsatn.Serializable              { return newArgs(key, encodeI64) }
-func DeletePkI128Args(key types.Int128) bsatn.Serializable      { return newArgs(key, encodeInt128) }
-func DeletePkI256Args(key types.Int256) bsatn.Serializable      { return newArgs(key, encodeInt256) }
-func DeletePkBoolArgs(key bool) bsatn.Serializable              { return newArgs(key, encodeBool) }
-func DeletePkStringArgs(key string) bsatn.Serializable          { return newArgs(key, encodeString) }
+func DeletePkU8Args(key uint8) bsatn.Serializable                { return newArgs(key, encodeU8) }
+func DeletePkU16Args(key uint16) bsatn.Serializable              { return newArgs(key, encodeU16) }
+func DeletePkU32Args(key uint32) bsatn.Serializable              { return newArgs(key, encodeU32) }
+func DeletePkU64Args(key uint64) bsatn.Serializable              { return newArgs(key, encodeU64) }
+func DeletePkU128Args(key types.Uint128) bsatn.Serializable      { return newArgs(key, encodeUint128) }
+func DeletePkU256Args(key types.Uint256) bsatn.Serializable      { return newArgs(key, encodeUint256) }
+func DeletePkI8Args(key int8) bsatn.Serializable                 { return newArgs(key, encodeI8) }
+func DeletePkI16Args(key int16) bsatn.Serializable               { return newArgs(key, encodeI16) }
+func DeletePkI32Args(key int32) bsatn.Serializable               { return newArgs(key, encodeI32) }
+func DeletePkI64Args(key int64) bsatn.Serializable               { return newArgs(key, encodeI64) }
+func DeletePkI128Args(key types.Int128) bsatn.Serializable       { return newArgs(key, encodeInt128) }
+func DeletePkI256Args(key types.Int256) bsatn.Serializable       { return newArgs(key, encodeInt256) }
+func DeletePkBoolArgs(key bool) bsatn.Serializable               { return newArgs(key, encodeBool) }
+func DeletePkStringArgs(key string) bsatn.Serializable           { return newArgs(key, encodeString) }
 func DeletePkIdentityArgs(key types.Identity) bsatn.Serializable { return newArgs(key, encodeIdentity) }
 func DeletePkConnectionIdArgs(key types.ConnectionId) bsatn.Serializable {
 	return newArgs(key, encodeConnectionId)
 }
 func DeletePkUuidArgs(key types.Uuid) bsatn.Serializable       { return newArgs(key, encodeUuid) }
-func DeletePkSimpleEnumArgs(key SimpleEnum) bsatn.Serializable  { return newArgs(key, encodeSimpleEnum) }
+func DeletePkSimpleEnumArgs(key SimpleEnum) bsatn.Serializable { return newArgs(key, encodeSimpleEnum) }
 
 // --- Update args for Pk* tables (key + data) ---
 
