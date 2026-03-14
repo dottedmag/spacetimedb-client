@@ -1,4 +1,11 @@
 
+0.5.0
+=============
+2026-03-14
+
+* feat: add generics support to make working with generated client bindings easier (a7983725)
+* chore: add LICENCE (4436fb22)
+
 0.2.2
 =============
 2026-03-14

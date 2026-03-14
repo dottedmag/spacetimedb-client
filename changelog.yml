@@ -1,3 +1,23 @@
+- semver: 0.5.0
+  date: 2026-03-14T21:17:02.52500546Z
+  packager: Dj Gilcrease <digitalxero@gmail.com>
+  changes:
+    - commit: a7983725f4a28b226b4c70b313f7c35855597660
+      note: 'feat: add generics support to make working with generated client bindings easier'
+      author:
+        name: Dj Gilcrease
+        email: digitalxero@gmail.com
+      committer:
+        name: Dj Gilcrease
+        email: digitalxero@gmail.com
+    - commit: 4436fb224cf310df0b6581252f12961d41634cf9
+      note: 'chore: add LICENCE'
+      author:
+        name: Dj Gilcrease
+        email: digitalxero@gmail.com
+      committer:
+        name: Dj Gilcrease
+        email: digitalxero@gmail.com
 - semver: 0.2.2
   date: 2026-03-14T06:52:45.910658321Z
   packager: Dj Gilcrease <digitalxero@gmail.com>
