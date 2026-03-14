@@ -1,3 +1,15 @@
+- semver: 0.2.0
+  date: 2026-03-14T00:17:02.520238146Z
+  packager: Dj Gilcrease <digitalxero@gmail.com>
+  changes:
+    - commit: 3aa08a4edddfdbe8d678b57dad0c4ea9c31fea42
+      note: 'feat: add task test:integration:local'
+      author:
+        name: Dj Gilcrease
+        email: digitalxero@gmail.com
+      committer:
+        name: Dj Gilcrease
+        email: digitalxero@gmail.com
 - semver: 0.1.0
   date: 2026-03-13T23:03:44.292181307Z
   packager: Dj Gilcrease <digitalxero@gmail.com>
