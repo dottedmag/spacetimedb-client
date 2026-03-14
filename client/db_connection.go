@@ -245,7 +245,7 @@ func (c *dbConnection) Run(ctx context.Context) error {
 	}()
 
 	shutdown := func(disconnectErr error) {
-		c.ws.Close()
+		_ = c.ws.Close()
 		readCancel()
 		<-readDone
 		if c.onDisconnect != nil {

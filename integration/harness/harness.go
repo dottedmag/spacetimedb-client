@@ -187,7 +187,7 @@ func (h *serverHarness) verifyServer(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("health check returned status %d", resp.StatusCode)
@@ -209,7 +209,7 @@ func (h *serverHarness) cloneModules(ctx context.Context) (string, error) {
 	)
 	cmd.Env = ensureCargoInPath(append(os.Environ(), "NO_COLOR=1"))
 	if output, err := cmd.CombinedOutput(); err != nil {
-		os.RemoveAll(tmpDir)
+		_ = os.RemoveAll(tmpDir)
 		return "", fmt.Errorf("git clone failed: %w\noutput: %s", err, string(output))
 	}
 

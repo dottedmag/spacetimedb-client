@@ -15,14 +15,14 @@ type ClientCache interface {
 
 func NewClientCache() ClientCache {
 	return &clientCache{
-		tables: xsync.NewMapOf[string, *tableCache](),
-		defs:   xsync.NewMapOf[string, TableDef](),
+		tables: xsync.NewMap[string, *tableCache](),
+		defs:   xsync.NewMap[string, TableDef](),
 	}
 }
 
 type clientCache struct {
-	tables *xsync.MapOf[string, *tableCache]
-	defs   *xsync.MapOf[string, TableDef]
+	tables *xsync.Map[string, *tableCache]
+	defs   *xsync.Map[string, TableDef]
 }
 
 func (cc *clientCache) GetTable(name string) TableCache {

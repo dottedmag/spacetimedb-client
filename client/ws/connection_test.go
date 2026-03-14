@@ -60,6 +60,6 @@ func TestConnectionBuilder_InterfaceTypes(t *testing.T) {
 	var _ ws.ConnectionBuilder
 
 	builder := ws.NewConnection()
-	var cb ws.ConnectionBuilder = builder
+	cb := builder
 	assert.NotNil(t, cb)
 }

@@ -132,6 +132,11 @@ test:integration:
     - test:build
   services:
     - name: clockworklabs/spacetime:${SPACETIMEDB_VERSION}
+      command:
+        - start
+        - --listen-addr
+        - 0.0.0.0:3000
+        - --in-memory
       alias: spacetimedb
   variables:
     SPACETIMEDB_URI: "ws://spacetimedb:3000"
@@ -147,7 +152,8 @@ test:integration:
     # Install SpacetimeDB CLI
     - |
       echo "Installing SpacetimeDB CLI..."
-      curl -sSf https://install.spacetimedb.com | bash -s -- --version ${SPACETIMEDB_VERSION}
+      export SPACETIME_DOWNLOAD_ROOT="https://github.com/clockworklabs/SpacetimeDB/releases/download/${SPACETIMEDB_VERSION}"
+      curl -sSf https://install.spacetimedb.com | bash -s -- -y
       export PATH="$HOME/.local/bin:$HOME/.local/share/spacetime/bin:$PATH"
     # Wait for SpacetimeDB server to be ready
     - |

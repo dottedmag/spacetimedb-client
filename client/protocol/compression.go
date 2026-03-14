@@ -42,7 +42,7 @@ func DecompressMessage(data []byte) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("protocol: gzip init: %w", err)
 		}
-		defer gr.Close()
+		defer func() { _ = gr.Close() }()
 		return io.ReadAll(gr)
 	default:
 		return nil, fmt.Errorf("protocol: unknown compression tag: %d", tag)

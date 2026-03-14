@@ -16,10 +16,6 @@ func ReadUnitStruct(_ bsatn.Reader) (*UnitStruct, error) {
 	return &UnitStruct{}, nil
 }
 
-func encodeUnitStruct(w bsatn.Writer, v *UnitStruct) {
-	v.WriteBsatn(w)
-}
-
 func decodeUnitStruct(r bsatn.Reader) (*UnitStruct, error) {
 	return ReadUnitStruct(r)
 }
@@ -41,10 +37,6 @@ func ReadByteStruct(r bsatn.Reader) (*ByteStruct, error) {
 		return nil, err
 	}
 	return &ByteStruct{A: a}, nil
-}
-
-func encodeByteStruct(w bsatn.Writer, v *ByteStruct) {
-	v.WriteBsatn(w)
 }
 
 func decodeByteStruct(r bsatn.Reader) (*ByteStruct, error) {
@@ -169,10 +161,6 @@ func ReadEveryPrimitiveStruct(r bsatn.Reader) (*EveryPrimitiveStruct, error) {
 		return nil, err
 	}
 	return &s, nil
-}
-
-func encodeEveryPrimitiveStruct(w bsatn.Writer, v *EveryPrimitiveStruct) {
-	v.WriteBsatn(w)
 }
 
 func decodeEveryPrimitiveStruct(r bsatn.Reader) (*EveryPrimitiveStruct, error) {
@@ -307,10 +295,6 @@ func ReadEveryVecStruct(r bsatn.Reader) (*EveryVecStruct, error) {
 		return nil, err
 	}
 	return &s, nil
-}
-
-func encodeEveryVecStruct(w bsatn.Writer, v *EveryVecStruct) {
-	v.WriteBsatn(w)
 }
 
 func decodeEveryVecStruct(r bsatn.Reader) (*EveryVecStruct, error) {

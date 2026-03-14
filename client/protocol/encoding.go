@@ -285,7 +285,7 @@ func DecompressV1QueryUpdate(cqu V1CompressableQueryUpdate) (*V1Uncompressed, er
 		if err != nil {
 			return nil, err
 		}
-		defer gr.Close()
+		defer func() { _ = gr.Close() }()
 		decoded, err := io.ReadAll(gr)
 		if err != nil {
 			return nil, err

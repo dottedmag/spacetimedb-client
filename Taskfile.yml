@@ -6,17 +6,17 @@ tasks:
     cmds:
       - go test ./...
 
-  test:bsatn:
+  "test:bsatn":
     desc: Run bsatn tests
     cmds:
       - go test ./bsatn/...
 
-  test:types:
+  "test:types":
     desc: Run types tests
     cmds:
       - go test ./types/...
 
-  test:client:
+  "test:client":
     desc: Run client tests
     cmds:
       - go test ./client/...
@@ -58,8 +58,8 @@ tasks:
     cmds:
       - go clean -cache -testcache
 
-  test:integration:
-    desc: Run integration tests (default: Rust module only, auto-clones SpacetimeDB repo)
+  "test:integration":
+    desc: "Run integration tests (default: Rust module only, auto-clones SpacetimeDB repo)"
     env:
       SPACETIMEDB_URI: '{{.SPACETIMEDB_URI | default "ws://localhost:3000"}}'
       SPACETIMEDB_MODULES_PATH: '{{.SPACETIMEDB_MODULES_PATH | default ""}}'
@@ -67,7 +67,7 @@ tasks:
     cmds:
       - go test -tags integration -v -count=1 -timeout 10m ./integration/...
 
-  test:integration:all:
+  "test:integration:all":
     desc: Run integration tests against all module variants
     env:
       SPACETIMEDB_URI: '{{.SPACETIMEDB_URI | default "ws://localhost:3000"}}'
@@ -75,6 +75,33 @@ tasks:
       SPACETIMEDB_MODULES: all
     cmds:
       - go test -tags integration -v -count=1 -timeout 15m ./integration/...
+
+  "test:integration:local":
+    desc: "Start SpacetimeDB Docker container and run integration tests locally"
+    vars:
+      SPACETIMEDB_PORT:
+        sh: echo ${SPACETIMEDB_PORT:-3000}
+    env:
+      SPACETIMEDB_URI: 'ws://localhost:{{.SPACETIMEDB_PORT}}'
+      SPACETIMEDB_MODULES_PATH: '{{.SPACETIMEDB_MODULES_PATH | default ""}}'
+      SPACETIMEDB_MODULES: '{{.SPACETIMEDB_MODULES | default "rust"}}'
+    cmds:
+      - docker run -d --replace --name spacetimedb-integration -p {{.SPACETIMEDB_PORT}}:3000 clockworklabs/spacetime:v2.0.5 start --listen-addr 0.0.0.0:3000 --in-memory
+      - defer: docker rm -f spacetimedb-integration
+      - |
+        echo "Waiting for SpacetimeDB server on port {{.SPACETIMEDB_PORT}}..."
+        for i in $(seq 1 30); do
+          if curl -sf http://localhost:{{.SPACETIMEDB_PORT}}/v1/ping > /dev/null 2>&1; then
+            echo "SpacetimeDB server is ready"
+            break
+          fi
+          if [ "$i" -eq 30 ]; then
+            echo "SpacetimeDB server did not start in time"
+            exit 1
+          fi
+          sleep 2
+        done
+      - go test -tags integration -v -count=1 -timeout 10m ./integration/...
 
   bench:
     desc: Run all benchmarks (BSATN + integration)
@@ -86,12 +113,12 @@ tasks:
       - go test -bench=. -benchmem -count=3 ./bsatn/...
       - go test -tags integration -bench=. -benchmem -count=3 -timeout 10m ./integration/...
 
-  bench:bsatn:
+  "bench:bsatn":
     desc: Run BSATN serialization benchmarks (no server needed)
     cmds:
       - go test -bench=. -benchmem -count=5 ./bsatn/...
 
-  bench:integration:
+  "bench:integration":
     desc: Run integration benchmarks against Rust and TypeScript modules
     env:
       SPACETIMEDB_URI: '{{.SPACETIMEDB_URI | default "ws://localhost:3000"}}'

@@ -23,19 +23,19 @@ type TableCache interface {
 func newTableCache(def TableDef) *tableCache {
 	return &tableCache{
 		def:             def,
-		rows:            xsync.NewMapOf[string, any](),
-		insertCallbacks: xsync.NewMapOf[CallbackID, InsertCallback](),
-		deleteCallbacks: xsync.NewMapOf[CallbackID, DeleteCallback](),
-		updateCallbacks: xsync.NewMapOf[CallbackID, UpdateCallback](),
+		rows:            xsync.NewMap[string, any](),
+		insertCallbacks: xsync.NewMap[CallbackID, InsertCallback](),
+		deleteCallbacks: xsync.NewMap[CallbackID, DeleteCallback](),
+		updateCallbacks: xsync.NewMap[CallbackID, UpdateCallback](),
 	}
 }
 
 type tableCache struct {
 	def             TableDef
-	rows            *xsync.MapOf[string, any]
-	insertCallbacks *xsync.MapOf[CallbackID, InsertCallback]
-	deleteCallbacks *xsync.MapOf[CallbackID, DeleteCallback]
-	updateCallbacks *xsync.MapOf[CallbackID, UpdateCallback]
+	rows            *xsync.Map[string, any]
+	insertCallbacks *xsync.Map[CallbackID, InsertCallback]
+	deleteCallbacks *xsync.Map[CallbackID, DeleteCallback]
+	updateCallbacks *xsync.Map[CallbackID, UpdateCallback]
 	nextCallbackID  atomic.Uint64
 }
 
