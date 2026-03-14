@@ -13,7 +13,21 @@ import (
 	"go.digitalxero.dev/spacetimedb-client/types"
 )
 
-// DbConnectionBuilder builds a DbConnection.
+// DbConnectionBuilder configures and establishes a connection to a
+// SpacetimeDB database. Use [NewDbConnection] to create a builder,
+// configure it with the With* and On* methods, then call Build to
+// connect.
+//
+// At minimum, WithUri and WithDatabaseName must be called before Build.
+// The builder methods can be chained:
+//
+//	conn, err := client.NewDbConnection().
+//		WithUri("ws://localhost:3000").
+//		WithDatabaseName("my_db").
+//		OnConnect(func(conn client.DbConnection, id types.Identity, token string) {
+//			fmt.Println("connected as", id)
+//		}).
+//		Build(ctx)
 type DbConnectionBuilder interface {
 	WithUri(uri string) DbConnectionBuilder
 	WithDatabaseName(nameOrAddress string) DbConnectionBuilder
@@ -25,7 +39,17 @@ type DbConnectionBuilder interface {
 	Build(ctx context.Context) (DbConnection, error)
 }
 
-// DbConnection is the primary interface for interacting with a SpacetimeDB database.
+// DbConnection is the primary interface for interacting with a SpacetimeDB
+// database. It provides methods for subscribing to queries, calling reducers,
+// executing one-off queries, and accessing the local row cache.
+//
+// All interaction with the database happens through a single-goroutine event
+// loop started by [DbConnection.Run]. Table registrations via RegisterTable
+// must happen before calling Run. After Run is called, use Subscribe to
+// register queries and CallReducer to invoke server-side functions.
+//
+// The connection remains active until Disconnect is called or the context
+// passed to Run is cancelled.
 type DbConnection interface {
 	Identity() types.Identity
 	ConnectionId() types.ConnectionId
@@ -40,7 +64,8 @@ type DbConnection interface {
 	Cache() cache.ClientCache
 }
 
-// NewDbConnection returns a new DbConnectionBuilder.
+// NewDbConnection returns a new [DbConnectionBuilder] with default settings.
+// Compression defaults to [protocol.CompressionNone].
 func NewDbConnection() DbConnectionBuilder {
 	return &dbConnectionBuilder{
 		compression: protocol.CompressionNone,
@@ -223,8 +248,17 @@ func (c *dbConnection) Disconnect() error {
 	return nil
 }
 
-// Run is the single-goroutine event loop. All state access on
-// subscriptionCallbacks happens here.
+// Run starts the single-goroutine event loop that processes all WebSocket
+// messages and commands. It blocks until the context is cancelled or
+// [DbConnection.Disconnect] is called.
+//
+// All server messages (subscription updates, reducer results, identity
+// tokens) are processed sequentially in this goroutine. Table cache
+// mutations and callbacks are invoked here, so callback functions should
+// not block for extended periods.
+//
+// Run must be called exactly once. Calling it again after it returns
+// is undefined behavior.
 func (c *dbConnection) Run(ctx context.Context) error {
 	c.active.Store(true)
 	defer c.active.Store(false)

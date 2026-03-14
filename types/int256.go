@@ -7,7 +7,12 @@ import (
 	"go.digitalxero.dev/spacetimedb-client/bsatn"
 )
 
-// Int256 represents a signed 256-bit integer stored as 32 bytes little-endian (two's complement).
+// Int256 represents a signed 256-bit integer stored as 32 bytes in
+// little-endian byte order using two's complement encoding.
+//
+// Construct with [NewInt256] (from a 32-byte LE array) or
+// [NewInt256FromU64s] (from four uint64 values).
+// [Int256.String] returns a signed decimal string representation.
 type Int256 interface {
 	bsatn.Serializable
 	Bytes() [32]byte

@@ -1,6 +1,13 @@
 package bsatn
 
-// Writer writes BSATN-encoded binary data. All multi-byte integers are little-endian.
+// Writer is a streaming binary encoder for the BSATN format.
+//
+// Writer accumulates encoded data in an auto-growing internal buffer.
+// All multi-byte integers are written in little-endian byte order.
+// Strings are length-prefixed with a u32 LE count followed by UTF-8 bytes.
+//
+// Create a Writer with [NewWriter], write values using the Put* methods,
+// then retrieve the accumulated bytes with Bytes.
 type Writer interface {
 	PutBool(v bool)
 	PutU8(v uint8)
@@ -23,7 +30,14 @@ type Writer interface {
 	Len() int             // current accumulated length
 }
 
-// Reader reads BSATN-encoded binary data.
+// Reader is a streaming binary decoder for the BSATN format.
+//
+// Reader maintains a position cursor that advances as values are read.
+// All multi-byte integers are read in little-endian byte order.
+// If there are insufficient bytes remaining for a read operation,
+// an [ErrBufferTooShort] error is returned.
+//
+// Create a Reader with [NewReader] or [NewZeroCopyReader].
 type Reader interface {
 	GetBool() (bool, error)
 	GetU8() (uint8, error)
@@ -44,7 +58,13 @@ type Reader interface {
 	Remaining() int
 }
 
-// Serializable can write itself as BSATN.
+// Serializable is the key interface for types that can encode themselves
+// as BSATN binary data. Implement WriteBsatn to write each field
+// sequentially to the [Writer] using the appropriate Put* method.
+//
+// All SpacetimeDB domain types ([types.Identity], [types.Timestamp], etc.)
+// implement Serializable. User-defined table structs should also implement
+// this interface to enable encoding reducer arguments and cache keys.
 type Serializable interface {
 	WriteBsatn(w Writer)
 }

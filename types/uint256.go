@@ -7,7 +7,12 @@ import (
 	"go.digitalxero.dev/spacetimedb-client/bsatn"
 )
 
-// Uint256 represents an unsigned 256-bit integer stored as 32 bytes little-endian.
+// Uint256 represents an unsigned 256-bit integer stored as 32 bytes
+// in little-endian byte order.
+//
+// Construct with [NewUint256] (from a 32-byte LE array) or
+// [NewUint256FromU64s] (from four uint64 values).
+// [Uint256.String] returns a decimal string representation.
 type Uint256 interface {
 	bsatn.Serializable
 	Bytes() [32]byte

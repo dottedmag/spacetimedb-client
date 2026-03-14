@@ -5,7 +5,9 @@ import (
 	"github.com/puzpuzpuz/xsync/v4"
 )
 
-// ClientCache manages all table caches.
+// ClientCache manages per-table row caches for all registered tables.
+// It provides table lookup by name, row decoding, and primary key
+// introspection. Create one with [NewClientCache].
 type ClientCache interface {
 	GetTable(name string) TableCache
 	RegisterTable(def TableDef)

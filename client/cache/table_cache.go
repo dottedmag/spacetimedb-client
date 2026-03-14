@@ -6,7 +6,17 @@ import (
 	"github.com/puzpuzpuz/xsync/v4"
 )
 
-// TableCache stores rows for a single table.
+// TableCache stores decoded rows for a single table, keyed by their
+// BSATN-encoded bytes. It supports insert, delete, and update callbacks
+// and provides row iteration via Iter.
+//
+// Rows are automatically managed by the [client.DbConnection] event loop
+// as subscription updates arrive. Use the On* methods to observe changes
+// and Iter/Count to query the current state.
+//
+// The ApplyInsert, ApplyDelete, and ApplyUpdate methods are intended for
+// internal use by the connection event loop and should not be called
+// directly by application code.
 type TableCache interface {
 	Count() int
 	Iter(fn func(row any) bool)
@@ -73,7 +83,9 @@ func (tc *tableCache) RemoveCallback(id CallbackID) {
 	tc.updateCallbacks.Delete(id)
 }
 
-// ApplyInsert stores a row and fires insert callbacks.
+// ApplyInsert stores a row in the cache and fires all registered
+// [InsertCallback] functions. This is called internally by the connection
+// event loop and should not be called by application code.
 func (tc *tableCache) ApplyInsert(rowBytes []byte, row any) {
 	key := string(rowBytes)
 	tc.rows.Store(key, row)
@@ -83,7 +95,9 @@ func (tc *tableCache) ApplyInsert(rowBytes []byte, row any) {
 	})
 }
 
-// ApplyDelete removes a row and fires delete callbacks.
+// ApplyDelete removes a row from the cache and fires all registered
+// [DeleteCallback] functions. This is called internally by the connection
+// event loop and should not be called by application code.
 func (tc *tableCache) ApplyDelete(rowBytes []byte, row any) {
 	key := string(rowBytes)
 	tc.rows.Delete(key)
@@ -93,7 +107,9 @@ func (tc *tableCache) ApplyDelete(rowBytes []byte, row any) {
 	})
 }
 
-// ApplyUpdate removes old row, stores new row, and fires update callbacks.
+// ApplyUpdate replaces an old row with a new row in the cache and fires
+// all registered [UpdateCallback] functions. This is called internally by
+// the connection event loop and should not be called by application code.
 func (tc *tableCache) ApplyUpdate(oldRowBytes []byte, oldRow any, newRowBytes []byte, newRow any) {
 	tc.rows.Delete(string(oldRowBytes))
 	tc.rows.Store(string(newRowBytes), newRow)

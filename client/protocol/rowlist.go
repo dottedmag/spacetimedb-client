@@ -23,7 +23,9 @@ type RowOffsetsHint struct {
 
 func (RowOffsetsHint) isRowSizeHint() {}
 
-// BsatnRowList holds a packed list of BSATN-encoded rows with boundary metadata.
+// BsatnRowList holds a packed list of BSATN-encoded rows with boundary
+// metadata. Use [BsatnRowList.Rows] to split into individual row byte
+// slices, or [BsatnRowList.Len] to get the count without allocating.
 type BsatnRowList struct {
 	SizeHint RowSizeHint
 	RowsData []byte
@@ -70,7 +72,8 @@ func ReadBsatnRowList(r bsatn.Reader) (*BsatnRowList, error) {
 	return &BsatnRowList{SizeHint: hint, RowsData: data}, nil
 }
 
-// Rows returns individual row byte slices extracted using the size hint.
+// Rows splits the packed RowsData into individual row byte slices using
+// the SizeHint. Returns nil if the list is empty.
 func (rl *BsatnRowList) Rows() [][]byte {
 	if rl == nil || len(rl.RowsData) == 0 {
 		return nil

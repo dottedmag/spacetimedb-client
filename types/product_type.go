@@ -8,7 +8,9 @@ type ProductTypeElement struct {
 	AlgebraicType AlgebraicType
 }
 
-// ProductType describes a product (struct) type with named fields.
+// ProductType describes a product (struct/record) type with named fields.
+// In SpacetimeDB, table rows are product types. Create one with
+// [NewProductType] from a list of [ProductTypeElement] values.
 type ProductType interface {
 	bsatn.Serializable
 	Elements() []ProductTypeElement

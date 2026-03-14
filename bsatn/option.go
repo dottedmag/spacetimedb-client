@@ -1,8 +1,13 @@
 package bsatn
 
 // WriteOption writes an Option<T> value as a BSATN sum type.
-// Some(value) = tag 0 + encoded value
-// None = tag 1 (empty product)
+// A non-nil pointer is encoded as Some: tag 0 followed by the encoded value.
+// A nil pointer is encoded as None: tag 1 with no payload.
+//
+// Wire format:
+//
+//	Some(v): [0x00] [encoded v]
+//	None:    [0x01]
 func WriteOption[T Serializable](w Writer, v *T) {
 	if v != nil {
 		w.PutSumTag(0)
@@ -12,7 +17,9 @@ func WriteOption[T Serializable](w Writer, v *T) {
 	}
 }
 
-// ReadOption reads a BSATN Option<T> using the provided read function.
+// ReadOption reads a BSATN Option<T> sum type using the provided read
+// function. Returns a non-nil pointer for Some (tag 0) or nil for None
+// (tag 1). Returns [ErrInvalidTag] for any other tag value.
 func ReadOption[T any](r Reader, readFn func(Reader) (T, error)) (*T, error) {
 	tag, err := r.GetSumTag()
 	if err != nil {

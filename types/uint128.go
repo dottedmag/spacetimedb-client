@@ -7,7 +7,12 @@ import (
 	"go.digitalxero.dev/spacetimedb-client/bsatn"
 )
 
-// Uint128 represents an unsigned 128-bit integer stored as 16 bytes little-endian.
+// Uint128 represents an unsigned 128-bit integer stored as 16 bytes
+// in little-endian byte order.
+//
+// Construct with [NewUint128] (from lo/hi uint64 halves) or
+// [NewUint128FromBytes] (from a raw 16-byte LE array).
+// [Uint128.String] returns a decimal string representation.
 type Uint128 interface {
 	bsatn.Serializable
 	Bytes() [16]byte

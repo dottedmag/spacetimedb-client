@@ -4,7 +4,11 @@ import (
 	"go.digitalxero.dev/spacetimedb-client/bsatn"
 )
 
-// EnergyQuanta wraps a Uint128 representing an energy budget.
+// EnergyQuanta wraps a [Uint128] representing the energy budget consumed
+// or remaining for a reducer invocation.
+//
+// In BSATN it is encoded as a u128 (16 bytes little-endian).
+// [EnergyQuanta.String] returns a decimal string of the energy amount.
 type EnergyQuanta interface {
 	bsatn.Serializable
 	Value() Uint128

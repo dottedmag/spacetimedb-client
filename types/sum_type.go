@@ -8,7 +8,9 @@ type SumTypeVariant struct {
 	AlgebraicType AlgebraicType
 }
 
-// SumType describes a sum (enum/union) type with named variants.
+// SumType describes a sum (enum/tagged union) type with named variants.
+// In SpacetimeDB, enums and Option types are sum types. Create one with
+// [NewSumType] from a list of [SumTypeVariant] values.
 type SumType interface {
 	bsatn.Serializable
 	Variants() []SumTypeVariant

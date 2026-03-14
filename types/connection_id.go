@@ -7,7 +7,13 @@ import (
 	"go.digitalxero.dev/spacetimedb-client/bsatn"
 )
 
-// ConnectionId is a 16-byte value identifying a client connection.
+// ConnectionId is a 16-byte value identifying a client connection to
+// a SpacetimeDB database.
+//
+// Internally stored as 16 bytes in little-endian order (matching the BSATN
+// wire format). [ConnectionId.String] returns big-endian hex (matching the
+// Rust ConnectionId::to_hex display format).
+//
 // In BSATN it is encoded as a product-wrapped u128 (16 raw bytes).
 type ConnectionId interface {
 	bsatn.Serializable
@@ -16,7 +22,7 @@ type ConnectionId interface {
 	String() string
 }
 
-// NewConnectionId creates a ConnectionId from a 16-byte array.
+// NewConnectionId creates a ConnectionId from a 16-byte array in little-endian order.
 func NewConnectionId(b [16]byte) ConnectionId {
 	return &connectionId{data: b}
 }

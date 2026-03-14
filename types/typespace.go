@@ -2,7 +2,9 @@ package types
 
 import "go.digitalxero.dev/spacetimedb-client/bsatn"
 
-// Typespace is a registry of types indexed by TypeRef.
+// Typespace is an ordered registry of [AlgebraicType] values indexed by
+// [TypeRef]. It supports forward references via Reserve/Set for defining
+// recursive types. Create one with [NewTypespace].
 type Typespace interface {
 	bsatn.Serializable
 	Add(at AlgebraicType) TypeRef

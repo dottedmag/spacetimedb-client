@@ -2,14 +2,19 @@ package types
 
 import "go.digitalxero.dev/spacetimedb-client/bsatn"
 
-// AlgebraicType describes a type in the SpacetimeDB type system.
+// AlgebraicType describes a type in SpacetimeDB's algebraic type system (SATS).
+// It is a sum type where each variant represents a different kind of type:
+// references, sum types, product types, primitives, arrays, and maps.
+//
+// Use the AlgType* constructor functions to create instances.
 // Each variant is serialized as a BSATN sum type with a specific tag.
 type AlgebraicType interface {
 	bsatn.Serializable
 	algebraicTypeTag() uint8
 }
 
-// TypeRef is an index into a Typespace.
+// TypeRef is an index into a [Typespace], used for type references and
+// recursive type definitions.
 type TypeRef uint32
 
 // Primitive type constructors.

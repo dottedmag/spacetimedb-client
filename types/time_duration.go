@@ -8,6 +8,11 @@ import (
 )
 
 // TimeDuration wraps an i64 representing a duration in microseconds.
+// Use [TimeDuration.Duration] to convert to a [time.Duration] value.
+//
+// In BSATN it is encoded as a single i64 (8 bytes little-endian).
+// [TimeDuration.String] returns seconds with 6-digit microsecond precision
+// (e.g., "1.500000" for 1.5 seconds).
 type TimeDuration interface {
 	bsatn.Serializable
 	Microseconds() int64

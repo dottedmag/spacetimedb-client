@@ -1,6 +1,8 @@
 package bsatn
 
-// WriteArray writes a slice as a BSATN array: u32 LE count + each element.
+// WriteArray writes a slice as a BSATN array.
+//
+// Wire format: u32 LE element count followed by each element encoded sequentially.
 func WriteArray[T Serializable](w Writer, items []T) {
 	w.PutArrayLen(uint32(len(items)))
 	for i := range items {
@@ -9,6 +11,7 @@ func WriteArray[T Serializable](w Writer, items []T) {
 }
 
 // ReadArray reads a BSATN array using the provided element read function.
+// It reads a u32 LE count, then decodes that many elements using readFn.
 func ReadArray[T any](r Reader, readFn func(Reader) (T, error)) ([]T, error) {
 	count, err := r.GetArrayLen()
 	if err != nil {
@@ -25,13 +28,17 @@ func ReadArray[T any](r Reader, readFn func(Reader) (T, error)) ([]T, error) {
 	return items, nil
 }
 
-// WriteByteArray writes a byte slice as BSATN: u32 LE length + raw bytes.
+// WriteByteArray writes a byte slice as a BSATN byte array.
+//
+// Wire format: u32 LE length followed by raw bytes (no per-element encoding).
+// This is an optimization over [WriteArray] for byte data.
 func WriteByteArray(w Writer, data []byte) {
 	w.PutArrayLen(uint32(len(data)))
 	w.PutBytes(data)
 }
 
-// ReadByteArray reads a BSATN byte array.
+// ReadByteArray reads a BSATN byte array: u32 LE length followed by
+// that many raw bytes. This is the counterpart to [WriteByteArray].
 func ReadByteArray(r Reader) ([]byte, error) {
 	count, err := r.GetArrayLen()
 	if err != nil {

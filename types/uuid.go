@@ -7,8 +7,15 @@ import (
 	"go.digitalxero.dev/spacetimedb-client/bsatn"
 )
 
-// Uuid represents a universally unique identifier.
-// It is stored as a product type { __uuid__: u128 } matching the Rust SATS representation.
+// Uuid represents a universally unique identifier (16 bytes).
+//
+// Internally stored as a u128 in little-endian byte order (matching
+// the BSATN wire format). [Uuid.String] reverses to big-endian and
+// returns the standard RFC 4122 hyphenated format
+// (e.g., "550e8400-e29b-41d4-a716-446655440000").
+//
+// Construct with [NewUuid] (from a 16-byte array) or
+// [NewUuidFromU128] (from a [Uint128] value).
 type Uuid interface {
 	bsatn.Serializable
 	Bytes() [16]byte

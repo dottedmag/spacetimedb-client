@@ -8,14 +8,23 @@ import (
 	"github.com/coder/websocket"
 )
 
-// Connection wraps a WebSocket connection for SpacetimeDB protocol v2.
+// Connection wraps a WebSocket connection to a SpacetimeDB server.
+// Send transmits a binary message, Recv blocks until a message arrives,
+// and Close performs a graceful WebSocket close handshake.
+//
+// All methods accept a context for cancellation. If the context is
+// cancelled, the operation returns the context error.
 type Connection interface {
 	Send(ctx context.Context, data []byte) error
 	Recv(ctx context.Context) ([]byte, error)
 	Close() error
 }
 
-// ConnectionBuilder builds a WebSocket connection.
+// ConnectionBuilder configures and establishes a WebSocket connection
+// to a SpacetimeDB server. Use [NewConnection] to create a builder.
+//
+// At minimum, WithUri and WithDatabaseName must be set before calling Build.
+// The default protocol is "v1.bsatn.spacetimedb".
 type ConnectionBuilder interface {
 	WithUri(uri string) ConnectionBuilder
 	WithDatabaseName(name string) ConnectionBuilder

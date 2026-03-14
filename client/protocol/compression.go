@@ -9,7 +9,9 @@ import (
 	"github.com/andybalholm/brotli"
 )
 
-// Compression identifies the compression algorithm used for a server message.
+// Compression identifies the compression algorithm for server messages.
+// Pass a Compression value to [client.DbConnectionBuilder.WithCompression]
+// to request compressed responses from the server.
 type Compression uint8
 
 const (

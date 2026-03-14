@@ -7,7 +7,12 @@ import (
 	"go.digitalxero.dev/spacetimedb-client/bsatn"
 )
 
-// Identity is a 32-byte value representing a user identity.
+// Identity is a 32-byte value representing a SpacetimeDB user identity.
+//
+// Internally stored as 32 bytes in little-endian order (matching the BSATN
+// wire format). [Identity.String] returns big-endian hex (matching the Rust
+// Identity::to_hex display format).
+//
 // In BSATN it is encoded as a product containing a u256 (32 raw bytes).
 type Identity interface {
 	bsatn.Serializable
@@ -16,7 +21,7 @@ type Identity interface {
 	String() string
 }
 
-// NewIdentity creates an Identity from a 32-byte array.
+// NewIdentity creates an Identity from a 32-byte array in little-endian order.
 func NewIdentity(b [32]byte) Identity {
 	return &identity{data: b}
 }

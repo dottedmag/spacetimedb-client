@@ -7,7 +7,12 @@ import (
 	"go.digitalxero.dev/spacetimedb-client/bsatn"
 )
 
-// Int128 represents a signed 128-bit integer stored as 16 bytes little-endian (two's complement).
+// Int128 represents a signed 128-bit integer stored as 16 bytes in
+// little-endian byte order using two's complement encoding.
+//
+// Construct with [NewInt128] (from lo/hi uint64 halves) or
+// [NewInt128FromBytes] (from a raw 16-byte LE array).
+// [Int128.String] returns a signed decimal string representation.
 type Int128 interface {
 	bsatn.Serializable
 	Bytes() [16]byte

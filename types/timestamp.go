@@ -7,6 +7,11 @@ import (
 )
 
 // Timestamp wraps an i64 representing microseconds since the Unix epoch.
+// Use [Timestamp.Time] to convert to a [time.Time] value.
+//
+// In BSATN it is encoded as a single i64 (8 bytes little-endian).
+// [Timestamp.String] returns a UTC timestamp in RFC 3339 format with
+// microsecond precision.
 type Timestamp interface {
 	bsatn.Serializable
 	Microseconds() int64

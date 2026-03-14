@@ -4,34 +4,56 @@ import (
 	"go.digitalxero.dev/spacetimedb-client/bsatn"
 )
 
-// CallbackID identifies a registered callback.
+// CallbackID is an opaque identifier returned when registering a callback
+// via [TableCache.OnInsert], [TableCache.OnDelete], or [TableCache.OnUpdate].
+// Pass it to [TableCache.RemoveCallback] to unregister the callback.
 type CallbackID uint64
 
-// RowDecoder can decode a BSATN row.
+// RowDecoder decodes a single BSATN-encoded row from a [bsatn.Reader]
+// into a Go value. The returned value should be a pointer to the table
+// struct type.
 type RowDecoder func(r bsatn.Reader) (any, error)
 
-// RowEncoder can encode a row to BSATN bytes for use as a cache key.
+// RowEncoder encodes a row value into BSATN bytes. The resulting bytes
+// serve as the cache key for the row within a [TableCache].
 type RowEncoder func(row any) []byte
 
-// TableDef defines a table for registration with the cache.
+// TableDef defines the schema for a SpacetimeDB table. Implement this
+// interface for each table type you want to cache locally.
+//
+// TableName returns the server-side table name (must match exactly).
+// DecodeRow reads a BSATN-encoded row into a Go struct (typically a pointer).
+// EncodeRow converts a Go struct back into BSATN bytes for use as a cache key.
+//
+// Register a TableDef with [ClientCache.RegisterTable] or
+// [client.DbConnection.RegisterTable] before starting the connection.
 type TableDef interface {
 	TableName() string
 	DecodeRow(r bsatn.Reader) (any, error)
 	EncodeRow(row any) []byte
 }
 
-// InsertCallback is called when a row is inserted.
+// InsertCallback is invoked when a new row is inserted into the table cache.
+// The row parameter is the decoded Go value (as returned by TableDef.DecodeRow).
 type InsertCallback func(row any)
 
-// DeleteCallback is called when a row is deleted.
+// DeleteCallback is invoked when a row is removed from the table cache.
+// The row parameter is the decoded Go value that was deleted.
 type DeleteCallback func(row any)
 
-// UpdateCallback is called when a row is updated (old, new).
+// UpdateCallback is invoked when a row is updated in the table cache.
+// This only fires for tables whose [TableDef] also implements [TableDefWithPK].
+// The oldRow and newRow parameters are the decoded Go values before and after
+// the update.
 type UpdateCallback func(oldRow any, newRow any)
 
-// TableDefWithPK extends TableDef for tables that have a primary key.
-// Tables implementing this interface support OnUpdate callbacks by
-// matching deletes and inserts by primary key within a single transaction.
+// TableDefWithPK extends [TableDef] for tables that have a primary key.
+// When implemented, the cache detects updates by matching delete+insert pairs
+// within the same transaction that share the same primary key value.
+// Matched pairs fire [UpdateCallback] instead of separate delete and insert callbacks.
+//
+// PrimaryKey should return a comparable value (e.g., uint64, string) that
+// uniquely identifies the row.
 type TableDefWithPK interface {
 	TableDef
 	PrimaryKey(row any) any

@@ -4,15 +4,19 @@ import (
 	"go.digitalxero.dev/spacetimedb-client/bsatn"
 )
 
-// ScheduleAt is a sum type representing either a recurring interval or a specific time.
-//   - Tag 0: Interval (TimeDuration)
-//   - Tag 1: Time (Timestamp)
+// ScheduleAt is a sum type representing either a recurring interval or a
+// specific point in time, used for scheduled reducer execution.
+//
+// Variants:
+//   - Tag 0: [ScheduleAtInterval] wraps a [TimeDuration] for recurring execution
+//   - Tag 1: [ScheduleAtTime] wraps a [Timestamp] for one-time execution
 type ScheduleAt interface {
 	bsatn.Serializable
 	isScheduleAt()
 }
 
-// ScheduleAtInterval is the Interval variant of ScheduleAt (tag 0).
+// ScheduleAtInterval is the Interval variant of [ScheduleAt] (tag 0).
+// It wraps a [TimeDuration] specifying the recurring interval.
 type ScheduleAtInterval struct {
 	Value TimeDuration
 }
@@ -24,7 +28,8 @@ func (s ScheduleAtInterval) WriteBsatn(w bsatn.Writer) {
 	s.Value.WriteBsatn(w)
 }
 
-// ScheduleAtTime is the Time variant of ScheduleAt (tag 1).
+// ScheduleAtTime is the Time variant of [ScheduleAt] (tag 1).
+// It wraps a [Timestamp] specifying the exact execution time.
 type ScheduleAtTime struct {
 	Value Timestamp
 }
