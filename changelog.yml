@@ -1,3 +1,15 @@
+- semver: 0.5.1
+  date: 2026-06-26T09:01:28.79993242Z
+  packager: Dj Gilcrease <digitalxero@gmail.com>
+  changes:
+    - commit: 0fb38d1768fc5492943c89a57df7e65534b00a14
+      note: 'fix: make Subscribe use SubscribeMulti'
+      author:
+        name: Dj Gilcrease
+        email: digitalxero@gmail.com
+      committer:
+        name: Dj Gilcrease
+        email: digitalxero@gmail.com
 - semver: 0.5.0
   date: 2026-03-14T21:17:02.52500546Z
   packager: Dj Gilcrease <digitalxero@gmail.com>
