@@ -162,7 +162,19 @@ type command struct {
 	queries    []string
 	querySetID uint32
 	onApplied  func()
+	onError    func(error)
 	result     chan any
+}
+
+// activeSubscription tracks a single independent subscription registered via
+// [SubscriptionBuilder.Build]. It is keyed by its server-side query_id and is
+// only ever accessed from the Run() goroutine event loop.
+type activeSubscription struct {
+	queryID   uint32
+	queries   []string
+	onApplied func()
+	onError   func(error)
+	applied   bool
 }
 
 // oneOffResult is the internal result passed back through the one-off query result channel.
@@ -190,9 +202,11 @@ type dbConnection struct {
 	onConnectError func(error)
 	onDisconnect   func(DbConnection, error)
 
-	// State maps only accessed from the Run() goroutine event loop.
-	subscriptionCallbacks map[uint32]func()   // keyed by request_id
-	oneOffCallbacks       map[uint64]chan any // keyed by messageID (first 8 bytes as uint64)
+	// State maps only accessed from the Run() goroutine event loop, so they
+	// need no synchronization: there is exactly one writer goroutine.
+	subscriptions   map[uint32]*activeSubscription // keyed by query_id
+	requestToQuery  map[uint32]uint32              // request_id -> query_id, for routing responses
+	oneOffCallbacks map[uint64]chan any            // keyed by messageID (first 8 bytes as uint64)
 }
 
 func (c *dbConnection) Identity() types.Identity         { return c.identity }
@@ -263,7 +277,8 @@ func (c *dbConnection) Run(ctx context.Context) error {
 	c.active.Store(true)
 	defer c.active.Store(false)
 
-	c.subscriptionCallbacks = make(map[uint32]func())
+	c.subscriptions = make(map[uint32]*activeSubscription)
+	c.requestToQuery = make(map[uint32]uint32)
 	c.oneOffCallbacks = make(map[uint64]chan any)
 
 	// readCtx is derived from context.Background() rather than the caller's
@@ -338,20 +353,35 @@ func (c *dbConnection) handleCommand(ctx context.Context, cmd *command) error {
 
 	case cmdSubscribe:
 		reqID := c.nextRequestID.Add(1)
-		if cmd.onApplied != nil {
-			c.subscriptionCallbacks[reqID] = cmd.onApplied
+		// Register the subscription keyed by its query_id so it can be tracked,
+		// unsubscribed, and replayed independently of any other subscription.
+		c.subscriptions[cmd.querySetID] = &activeSubscription{
+			queryID:   cmd.querySetID,
+			queries:   cmd.queries,
+			onApplied: cmd.onApplied,
+			onError:   cmd.onError,
 		}
-		// Use v1 Subscribe (tag 1) which replaces the entire subscription set.
-		msg := &protocol.Subscribe{
+		c.requestToQuery[reqID] = cmd.querySetID
+		// Use SubscribeMulti (tag 4) with a unique query_id so each subscription
+		// is additive rather than replacing the entire subscription set.
+		msg := &protocol.SubscribeMulti{
 			QueryStrings: cmd.queries,
 			RequestID:    reqID,
+			QueryID:      cmd.querySetID,
 		}
 		return c.sendMessage(ctx, msg)
 
 	case cmdUnsubscribe:
-		// v1 doesn't have a direct unsubscribe for Subscribe (tag 1).
-		// Would need to use UnsubscribeMulti for SubscribeMulti subscriptions.
-		return nil
+		reqID := c.nextRequestID.Add(1)
+		c.requestToQuery[reqID] = cmd.querySetID
+		// Use UnsubscribeMulti (tag 6) to remove only this subscription. The
+		// registry entry is removed when the server confirms with
+		// UnsubscribeMultiApplied (see handleIncoming).
+		msg := &protocol.UnsubscribeMulti{
+			RequestID: reqID,
+			QueryID:   cmd.querySetID,
+		}
+		return c.sendMessage(ctx, msg)
 
 	case cmdOneOffQuery:
 		reqID := c.nextRequestID.Add(1)
@@ -397,6 +427,13 @@ func (c *dbConnection) handleIncoming(data []byte) {
 		return
 	}
 
+	c.dispatchServerMessage(msg)
+}
+
+// dispatchServerMessage applies a decoded server message to connection state,
+// the row cache, and any registered subscription callbacks. It is only called
+// from the Run() goroutine event loop.
+func (c *dbConnection) dispatchServerMessage(msg protocol.ServerMessage) {
 	switch m := msg.(type) {
 	case *protocol.IdentityToken:
 		c.identity = m.Identity
@@ -407,22 +444,36 @@ func (c *dbConnection) handleIncoming(data []byte) {
 		}
 
 	case *protocol.InitialSubscription:
-		// InitialSubscription is the response to a Subscribe (tag 1) message.
-		// Apply all rows from the database update to the cache.
+		// InitialSubscription is the legacy response to a Subscribe (tag 1)
+		// message. The client now uses SubscribeMulti, so this is a defensive
+		// fallback. Apply rows and fire onApplied for the subscription matched
+		// by request_id.
 		c.applyV1DatabaseUpdate(&m.DatabaseUpdate)
-		// Fire the onApplied callback for this request.
-		if cb, ok := c.subscriptionCallbacks[m.RequestID]; ok {
-			cb()
-			delete(c.subscriptionCallbacks, m.RequestID)
+		if sub := c.subForRequest(m.RequestID); sub != nil {
+			sub.applied = true
+			if sub.onApplied != nil {
+				sub.onApplied()
+			}
 		}
 
 	case *protocol.SubscribeMultiApplied:
-		// SubscribeMultiApplied is the response to SubscribeMulti (tag 4).
+		// SubscribeMultiApplied is the response to SubscribeMulti (tag 4/8).
 		c.applyV1DatabaseUpdate(&m.Update)
-		if cb, ok := c.subscriptionCallbacks[m.RequestID]; ok {
-			cb()
-			delete(c.subscriptionCallbacks, m.RequestID)
+		delete(c.requestToQuery, m.RequestID)
+		if sub, ok := c.subscriptions[m.QueryID]; ok {
+			sub.applied = true
+			if sub.onApplied != nil {
+				sub.onApplied()
+			}
 		}
+
+	case *protocol.UnsubscribeMultiApplied:
+		// UnsubscribeMultiApplied confirms removal of a subscription. Its update
+		// carries the rows to remove; the server computes the correct delta so
+		// rows still referenced by other live subscriptions are preserved.
+		c.applyV1DatabaseUpdate(&m.Update)
+		delete(c.requestToQuery, m.RequestID)
+		delete(c.subscriptions, m.QueryID)
 
 	case *protocol.V1TransactionUpdate:
 		// Full transaction update from a reducer run.
@@ -436,9 +487,23 @@ func (c *dbConnection) handleIncoming(data []byte) {
 		c.applyV1DatabaseUpdate(&m.DatabaseUpdate)
 
 	case *protocol.V1SubscriptionError:
-		// Remove subscription callback on error.
+		// Resolve the failed subscription by query_id (preferred) or request_id,
+		// fire its onError callback, and drop it from the registry.
+		var sub *activeSubscription
+		switch {
+		case m.QueryID != nil:
+			sub = c.subscriptions[*m.QueryID]
+		case m.RequestID != nil:
+			sub = c.subForRequest(*m.RequestID)
+		}
 		if m.RequestID != nil {
-			delete(c.subscriptionCallbacks, *m.RequestID)
+			delete(c.requestToQuery, *m.RequestID)
+		}
+		if sub != nil {
+			if sub.onError != nil {
+				sub.onError(&SubscriptionError{QuerySetID: sub.queryID, Message: m.Error})
+			}
+			delete(c.subscriptions, sub.queryID)
 		}
 
 	case *protocol.OneOffQueryResponse:
@@ -550,15 +615,58 @@ func (c *dbConnection) applyPKUpdate(tc cache.TableCache, pkDef cache.TableDefWi
 	}
 }
 
+// subForRequest resolves the active subscription associated with a given
+// request_id via the requestToQuery map. It is only called from the Run()
+// goroutine. Returns nil if no subscription is tracked for that request.
+func (c *dbConnection) subForRequest(reqID uint32) *activeSubscription {
+	qid, ok := c.requestToQuery[reqID]
+	if !ok {
+		return nil
+	}
+	return c.subscriptions[qid]
+}
+
+// resubscribeAll re-sends a SubscribeMulti for every tracked subscription,
+// reusing each subscription's existing query_id. It is intended to be invoked
+// after a connection is (re)established so the server's subscription set is
+// restored.
+//
+// NOTE: the client currently has no internal auto-reconnect loop — Run returns
+// when the connection is lost and the caller must rebuild. This method is wired
+// and ready for that future path; it is only meaningful once a reconnect
+// mechanism calls it.
+func (c *dbConnection) resubscribeAll(ctx context.Context) error {
+	for qid, sub := range c.subscriptions {
+		reqID := c.nextRequestID.Add(1)
+		c.requestToQuery[reqID] = qid
+		sub.applied = false
+		msg := &protocol.SubscribeMulti{
+			QueryStrings: sub.queries,
+			RequestID:    reqID,
+			QueryID:      qid,
+		}
+		if err := c.sendMessage(ctx, msg); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // subscriptionBuilder implements SubscriptionBuilder.
 type subscriptionBuilder struct {
 	conn      *dbConnection
 	queries   []string
 	onApplied func()
+	onError   func(error)
 }
 
 func (sb *subscriptionBuilder) OnApplied(fn func()) SubscriptionBuilder {
 	sb.onApplied = fn
+	return sb
+}
+
+func (sb *subscriptionBuilder) OnError(fn func(error)) SubscriptionBuilder {
+	sb.onError = fn
 	return sb
 }
 
@@ -570,6 +678,7 @@ func (sb *subscriptionBuilder) Build() (SubscriptionHandle, error) {
 		queries:    sb.queries,
 		querySetID: qsID,
 		onApplied:  sb.onApplied,
+		onError:    sb.onError,
 	}
 
 	return &subscriptionHandle{
@@ -597,6 +706,10 @@ func (sh *subscriptionHandle) Unsubscribe() error {
 
 func (sh *subscriptionHandle) IsActive() bool {
 	return sh.active
+}
+
+func (sh *subscriptionHandle) QueryID() uint32 {
+	return sh.querySetID
 }
 
 // Ensure interfaces are satisfied at compile time.
