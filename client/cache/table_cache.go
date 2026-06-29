@@ -23,10 +23,12 @@ type TableCache interface {
 	OnInsert(cb InsertCallback) CallbackID
 	OnDelete(cb DeleteCallback) CallbackID
 	OnUpdate(cb UpdateCallback) CallbackID
+	OnEvent(cb EventCallback) CallbackID
 	RemoveCallback(id CallbackID)
 	ApplyInsert(rowBytes []byte, row any)
 	ApplyDelete(rowBytes []byte, row any)
 	ApplyUpdate(oldRowBytes []byte, oldRow any, newRowBytes []byte, newRow any)
+	ApplyEvent(rowBytes []byte, row any)
 }
 
 // newTableCache creates a new table cache.
@@ -37,6 +39,7 @@ func newTableCache(def TableDef) *tableCache {
 		insertCallbacks: xsync.NewMap[CallbackID, InsertCallback](),
 		deleteCallbacks: xsync.NewMap[CallbackID, DeleteCallback](),
 		updateCallbacks: xsync.NewMap[CallbackID, UpdateCallback](),
+		eventCallbacks:  xsync.NewMap[CallbackID, EventCallback](),
 	}
 }
 
@@ -46,6 +49,7 @@ type tableCache struct {
 	insertCallbacks *xsync.Map[CallbackID, InsertCallback]
 	deleteCallbacks *xsync.Map[CallbackID, DeleteCallback]
 	updateCallbacks *xsync.Map[CallbackID, UpdateCallback]
+	eventCallbacks  *xsync.Map[CallbackID, EventCallback]
 	nextCallbackID  atomic.Uint64
 }
 
@@ -77,10 +81,17 @@ func (tc *tableCache) OnUpdate(cb UpdateCallback) CallbackID {
 	return id
 }
 
+func (tc *tableCache) OnEvent(cb EventCallback) CallbackID {
+	id := CallbackID(tc.nextCallbackID.Add(1))
+	tc.eventCallbacks.Store(id, cb)
+	return id
+}
+
 func (tc *tableCache) RemoveCallback(id CallbackID) {
 	tc.insertCallbacks.Delete(id)
 	tc.deleteCallbacks.Delete(id)
 	tc.updateCallbacks.Delete(id)
+	tc.eventCallbacks.Delete(id)
 }
 
 // ApplyInsert stores a row in the cache and fires all registered
@@ -115,6 +126,17 @@ func (tc *tableCache) ApplyUpdate(oldRowBytes []byte, oldRow any, newRowBytes []
 	tc.rows.Store(string(newRowBytes), newRow)
 	tc.updateCallbacks.Range(func(_ CallbackID, cb UpdateCallback) bool {
 		cb(oldRow, newRow)
+		return true
+	})
+}
+
+// ApplyEvent fires all registered [EventCallback] functions for an ephemeral
+// event-table row. Unlike ApplyInsert, the row is NOT stored in the cache, so
+// it never appears in Count or Iter. This is called internally by the
+// connection event loop and should not be called by application code.
+func (tc *tableCache) ApplyEvent(rowBytes []byte, row any) {
+	tc.eventCallbacks.Range(func(_ CallbackID, cb EventCallback) bool {
+		cb(row)
 		return true
 	})
 }

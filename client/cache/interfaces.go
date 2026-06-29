@@ -47,6 +47,11 @@ type DeleteCallback func(row any)
 // the update.
 type UpdateCallback func(oldRow any, newRow any)
 
+// EventCallback is invoked when an ephemeral event row is delivered for an
+// event table. Unlike inserts, event rows are not retained in the cache, so
+// they fire only this callback and never appear in Count or Iter.
+type EventCallback func(row any)
+
 // TableDefWithPK extends [TableDef] for tables that have a primary key.
 // When implemented, the cache detects updates by matching delete+insert pairs
 // within the same transaction that share the same primary key value.
@@ -81,3 +86,7 @@ type TypedDeleteCallback[T any] func(row T)
 
 // TypedUpdateCallback is invoked when a row is updated, with compile-time type safety.
 type TypedUpdateCallback[T any] func(oldRow T, newRow T)
+
+// TypedEventCallback is invoked when an ephemeral event row is delivered for an
+// event table, with compile-time type safety.
+type TypedEventCallback[T any] func(row T)

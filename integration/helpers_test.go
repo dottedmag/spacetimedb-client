@@ -40,6 +40,13 @@ func connectAndRun(t *testing.T, dbName string, opts ...func(client.DbConnection
 		OnConnectError(func(err error) {
 			t.Errorf("connect error: %v", err)
 			cancel()
+		}).
+		OnReducerError(func(err error) {
+			// A reducer call failing on the server (e.g. an unsupported reducer
+			// in an older module) is not a connection error and must not tear
+			// down the connection; tests that exercise such reducers handle the
+			// missing row themselves. Surface it as a log only.
+			t.Logf("reducer error: %v", err)
 		})
 
 	for _, opt := range opts {

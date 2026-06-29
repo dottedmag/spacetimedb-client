@@ -46,6 +46,14 @@ func (tc *TypedTableCache[T]) OnUpdate(fn TypedUpdateCallback[T]) CallbackID {
 	})
 }
 
+// OnEvent registers a typed callback for ephemeral event-table rows. Event rows
+// fire only this callback and are not retained in the cache.
+func (tc *TypedTableCache[T]) OnEvent(fn TypedEventCallback[T]) CallbackID {
+	return tc.inner.OnEvent(func(row any) {
+		fn(row.(T))
+	})
+}
+
 // RemoveCallback removes a previously registered callback by its ID.
 func (tc *TypedTableCache[T]) RemoveCallback(id CallbackID) {
 	tc.inner.RemoveCallback(id)

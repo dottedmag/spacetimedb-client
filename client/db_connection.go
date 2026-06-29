@@ -2,7 +2,6 @@ package client
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
 	"sync/atomic"
 
@@ -36,6 +35,12 @@ type DbConnectionBuilder interface {
 	OnConnect(fn func(conn DbConnection, identity types.Identity, token string)) DbConnectionBuilder
 	OnConnectError(fn func(err error)) DbConnectionBuilder
 	OnDisconnect(fn func(conn DbConnection, err error)) DbConnectionBuilder
+	// OnReducerError registers a handler invoked when a reducer call (which is
+	// fire-and-forget) fails on the server — a structured error return or a host
+	// internal error such as "no such reducer". This is distinct from
+	// OnConnectError: a reducer failure does not affect the connection, so the
+	// handler should not treat it as fatal. The error is a [*ReducerError].
+	OnReducerError(fn func(err error)) DbConnectionBuilder
 	Build(ctx context.Context) (DbConnection, error)
 }
 
@@ -57,6 +62,7 @@ type DbConnection interface {
 	IsActive() bool
 	Subscribe(queries ...string) SubscriptionBuilder
 	CallReducer(reducer string, args bsatn.Serializable) error
+	CallProcedure(ctx context.Context, procedure string, args bsatn.Serializable) ([]byte, error)
 	OneOffQuery(query string) ([][]byte, error)
 	Disconnect() error
 	Run(ctx context.Context) error
@@ -80,6 +86,7 @@ type dbConnectionBuilder struct {
 	onConnect      func(DbConnection, types.Identity, string)
 	onConnectError func(error)
 	onDisconnect   func(DbConnection, error)
+	onReducerError func(error)
 }
 
 func (b *dbConnectionBuilder) WithUri(uri string) DbConnectionBuilder {
@@ -117,6 +124,11 @@ func (b *dbConnectionBuilder) OnDisconnect(fn func(DbConnection, error)) DbConne
 	return b
 }
 
+func (b *dbConnectionBuilder) OnReducerError(fn func(error)) DbConnectionBuilder {
+	b.onReducerError = fn
+	return b
+}
+
 func (b *dbConnectionBuilder) Build(ctx context.Context) (DbConnection, error) {
 	wsConn, err := ws.NewConnection().
 		WithUri(b.uri).
@@ -139,6 +151,7 @@ func (b *dbConnectionBuilder) Build(ctx context.Context) (DbConnection, error) {
 		onConnect:      b.onConnect,
 		onConnectError: b.onConnectError,
 		onDisconnect:   b.onDisconnect,
+		onReducerError: b.onReducerError,
 	}
 
 	return conn, nil
@@ -149,6 +162,7 @@ type commandType int
 
 const (
 	cmdCallReducer commandType = iota
+	cmdCallProcedure
 	cmdSubscribe
 	cmdUnsubscribe
 	cmdOneOffQuery
@@ -183,6 +197,13 @@ type oneOffResult struct {
 	err  error
 }
 
+// procedureResult is the internal result passed back through the procedure call
+// result channel. value holds the BSATN-encoded return value on success.
+type procedureResult struct {
+	value []byte
+	err   error
+}
+
 type dbConnection struct {
 	ws          ws.Connection
 	cache       cache.ClientCache
@@ -201,12 +222,14 @@ type dbConnection struct {
 	onConnect      func(DbConnection, types.Identity, string)
 	onConnectError func(error)
 	onDisconnect   func(DbConnection, error)
+	onReducerError func(error)
 
 	// State maps only accessed from the Run() goroutine event loop, so they
 	// need no synchronization: there is exactly one writer goroutine.
-	subscriptions   map[uint32]*activeSubscription // keyed by query_id
-	requestToQuery  map[uint32]uint32              // request_id -> query_id, for routing responses
-	oneOffCallbacks map[uint64]chan any            // keyed by messageID (first 8 bytes as uint64)
+	subscriptions      map[uint32]*activeSubscription // keyed by query_set_id
+	oneOffCallbacks    map[uint32]chan any            // keyed by request_id
+	procedureCallbacks map[uint32]chan any            // keyed by request_id, for routing procedure results
+	reducerNames       map[uint32]string              // request_id -> reducer name, for reducer-result errors
 }
 
 func (c *dbConnection) Identity() types.Identity         { return c.identity }
@@ -232,6 +255,55 @@ func (c *dbConnection) CallReducer(reducer string, args bsatn.Serializable) erro
 		args:    encoded,
 	}
 	return nil
+}
+
+// CallProcedure invokes a procedure on the server and blocks until its result
+// arrives. Unlike CallReducer (which is fire-and-forget), a procedure returns a
+// value: the returned bytes are the BSATN encoding of the procedure's declared
+// return type, which generated callers decode into a typed value.
+//
+// The call blocks until the server sends the matching ProcedureResult, ctx is
+// cancelled, or the connection drops. A non-success status (host/internal error
+// or out-of-energy) is returned as a *ProcedureError.
+//
+// CallProcedure must not be called from within the Run() goroutine (e.g. from a
+// subscription callback), since it blocks waiting for that goroutine to process
+// the response.
+func (c *dbConnection) CallProcedure(ctx context.Context, procedure string, args bsatn.Serializable) ([]byte, error) {
+	var encoded []byte
+	if args != nil {
+		w := bsatn.NewWriter(64)
+		args.WriteBsatn(w)
+		encoded = w.Bytes()
+	}
+
+	result := make(chan any, 1)
+	cmd := &command{
+		typ:     cmdCallProcedure,
+		reducer: procedure,
+		args:    encoded,
+		result:  result,
+	}
+
+	select {
+	case c.commands <- cmd:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+
+	select {
+	case resp := <-result:
+		r, ok := resp.(procedureResult)
+		if !ok {
+			return nil, &ProtocolError{Message: "unexpected procedure result type"}
+		}
+		if pe, ok := r.err.(*ProcedureError); ok && pe.ProcedureName == "" {
+			pe.ProcedureName = procedure
+		}
+		return r.value, r.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 func (c *dbConnection) OneOffQuery(query string) ([][]byte, error) {
@@ -278,8 +350,9 @@ func (c *dbConnection) Run(ctx context.Context) error {
 	defer c.active.Store(false)
 
 	c.subscriptions = make(map[uint32]*activeSubscription)
-	c.requestToQuery = make(map[uint32]uint32)
-	c.oneOffCallbacks = make(map[uint64]chan any)
+	c.oneOffCallbacks = make(map[uint32]chan any)
+	c.procedureCallbacks = make(map[uint32]chan any)
+	c.reducerNames = make(map[uint32]string)
 
 	// readCtx is derived from context.Background() rather than the caller's
 	// ctx so that context cancellation does not kill the TCP connection before
@@ -343,17 +416,33 @@ func (c *dbConnection) handleCommand(ctx context.Context, cmd *command) error {
 	switch cmd.typ {
 	case cmdCallReducer:
 		reqID := c.nextRequestID.Add(1)
+		// Remember the reducer name so a failing ReducerResult (which only
+		// carries request_id) can report which reducer failed.
+		c.reducerNames[reqID] = cmd.reducer
 		msg := &protocol.CallReducer{
+			RequestID: reqID,
+			Flags:     0,
 			Reducer:   cmd.reducer,
 			Args:      cmd.args,
+		}
+		return c.sendMessage(ctx, msg)
+
+	case cmdCallProcedure:
+		reqID := c.nextRequestID.Add(1)
+		if cmd.result != nil {
+			c.procedureCallbacks[reqID] = cmd.result
+		}
+		msg := &protocol.CallProcedure{
 			RequestID: reqID,
-			Flags:     0, // FullUpdate
+			Flags:     0,
+			Procedure: cmd.reducer,
+			Args:      cmd.args,
 		}
 		return c.sendMessage(ctx, msg)
 
 	case cmdSubscribe:
 		reqID := c.nextRequestID.Add(1)
-		// Register the subscription keyed by its query_id so it can be tracked,
+		// Register the subscription keyed by its query_set_id so it can be tracked,
 		// unsubscribed, and replayed independently of any other subscription.
 		c.subscriptions[cmd.querySetID] = &activeSubscription{
 			queryID:   cmd.querySetID,
@@ -361,39 +450,31 @@ func (c *dbConnection) handleCommand(ctx context.Context, cmd *command) error {
 			onApplied: cmd.onApplied,
 			onError:   cmd.onError,
 		}
-		c.requestToQuery[reqID] = cmd.querySetID
-		// Use SubscribeMulti (tag 4) with a unique query_id so each subscription
-		// is additive rather than replacing the entire subscription set.
-		msg := &protocol.SubscribeMulti{
-			QueryStrings: cmd.queries,
+		msg := &protocol.Subscribe{
 			RequestID:    reqID,
-			QueryID:      cmd.querySetID,
+			QuerySetID:   cmd.querySetID,
+			QueryStrings: cmd.queries,
 		}
 		return c.sendMessage(ctx, msg)
 
 	case cmdUnsubscribe:
 		reqID := c.nextRequestID.Add(1)
-		c.requestToQuery[reqID] = cmd.querySetID
-		// Use UnsubscribeMulti (tag 6) to remove only this subscription. The
-		// registry entry is removed when the server confirms with
-		// UnsubscribeMultiApplied (see handleIncoming).
-		msg := &protocol.UnsubscribeMulti{
-			RequestID: reqID,
-			QueryID:   cmd.querySetID,
+		// The registry entry is removed when the server confirms with
+		// UnsubscribeApplied (see dispatchServerMessage).
+		msg := &protocol.Unsubscribe{
+			RequestID:  reqID,
+			QuerySetID: cmd.querySetID,
+			Flags:      protocol.UnsubscribeDefault,
 		}
 		return c.sendMessage(ctx, msg)
 
 	case cmdOneOffQuery:
 		reqID := c.nextRequestID.Add(1)
-		// v1 OneOffQuery uses a message_id (byte array) instead of request_id.
-		// We encode the request ID as 8 bytes.
-		msgID := make([]byte, 8)
-		binary.LittleEndian.PutUint64(msgID, uint64(reqID))
 		if cmd.result != nil {
-			c.oneOffCallbacks[uint64(reqID)] = cmd.result
+			c.oneOffCallbacks[reqID] = cmd.result
 		}
 		msg := &protocol.OneOffQuery{
-			MessageID:   msgID,
+			RequestID:   reqID,
 			QueryString: cmd.queries[0],
 		}
 		return c.sendMessage(ctx, msg)
@@ -435,7 +516,7 @@ func (c *dbConnection) handleIncoming(data []byte) {
 // from the Run() goroutine event loop.
 func (c *dbConnection) dispatchServerMessage(msg protocol.ServerMessage) {
 	switch m := msg.(type) {
-	case *protocol.IdentityToken:
+	case *protocol.InitialConnection:
 		c.identity = m.Identity
 		c.connectionID = m.ConnectionID
 		c.token = m.Token
@@ -443,151 +524,218 @@ func (c *dbConnection) dispatchServerMessage(msg protocol.ServerMessage) {
 			c.onConnect(c, m.Identity, m.Token)
 		}
 
-	case *protocol.InitialSubscription:
-		// InitialSubscription is the legacy response to a Subscribe (tag 1)
-		// message. The client now uses SubscribeMulti, so this is a defensive
-		// fallback. Apply rows and fire onApplied for the subscription matched
-		// by request_id.
-		c.applyV1DatabaseUpdate(&m.DatabaseUpdate)
-		if sub := c.subForRequest(m.RequestID); sub != nil {
+	case *protocol.SubscribeApplied:
+		// Initial matching rows for a newly-applied query set: apply them as
+		// inserts and fire onApplied for the subscription keyed by query_set_id.
+		c.applyQueryRows(&m.Rows)
+		if sub, ok := c.subscriptions[m.QuerySetID]; ok {
 			sub.applied = true
 			if sub.onApplied != nil {
 				sub.onApplied()
 			}
 		}
 
-	case *protocol.SubscribeMultiApplied:
-		// SubscribeMultiApplied is the response to SubscribeMulti (tag 4/8).
-		c.applyV1DatabaseUpdate(&m.Update)
-		delete(c.requestToQuery, m.RequestID)
-		if sub, ok := c.subscriptions[m.QueryID]; ok {
-			sub.applied = true
-			if sub.onApplied != nil {
-				sub.onApplied()
+	case *protocol.UnsubscribeApplied:
+		// Confirms removal of a query set. The optional rows (sent only when the
+		// Unsubscribe requested dropped rows) are removed from the cache.
+		if m.Rows != nil {
+			c.applyQueryRowsAsDeletes(m.Rows)
+		}
+		delete(c.subscriptions, m.QuerySetID)
+
+	case *protocol.TransactionUpdate:
+		// Broadcast row changes for the client's subscribed query sets.
+		for i := range m.QuerySets {
+			c.applyQuerySetUpdate(&m.QuerySets[i])
+		}
+
+	case *protocol.ReducerResult:
+		// Response to this client's CallReducer. CallReducer is fire-and-forget,
+		// so on a committed run we apply the caller's embedded transaction update,
+		// and on a failed run we surface the error via onReducerError — never via
+		// onConnectError, because a reducer failure does not affect the connection.
+		name := c.reducerNames[m.RequestID]
+		delete(c.reducerNames, m.RequestID)
+		switch outcome := m.Outcome.(type) {
+		case *protocol.ReducerOk:
+			for i := range outcome.TransactionUpdate.QuerySets {
+				c.applyQuerySetUpdate(&outcome.TransactionUpdate.QuerySets[i])
+			}
+		case *protocol.ReducerErr:
+			if c.onReducerError != nil {
+				c.onReducerError(&ReducerError{ReducerName: name, Message: "reducer returned an error"})
+			}
+		case *protocol.ReducerInternalError:
+			if c.onReducerError != nil {
+				c.onReducerError(&ReducerError{ReducerName: name, Message: outcome.Message})
 			}
 		}
 
-	case *protocol.UnsubscribeMultiApplied:
-		// UnsubscribeMultiApplied confirms removal of a subscription. Its update
-		// carries the rows to remove; the server computes the correct delta so
-		// rows still referenced by other live subscriptions are preserved.
-		c.applyV1DatabaseUpdate(&m.Update)
-		delete(c.requestToQuery, m.RequestID)
-		delete(c.subscriptions, m.QueryID)
-
-	case *protocol.V1TransactionUpdate:
-		// Full transaction update from a reducer run.
-		switch status := m.Status.(type) {
-		case *protocol.V1Committed:
-			c.applyV1DatabaseUpdate(&status.DatabaseUpdate)
-		}
-
-	case *protocol.V1TransactionUpdateLight:
-		// Light transaction update (just the database changes).
-		c.applyV1DatabaseUpdate(&m.DatabaseUpdate)
-
-	case *protocol.V1SubscriptionError:
-		// Resolve the failed subscription by query_id (preferred) or request_id,
-		// fire its onError callback, and drop it from the registry.
-		var sub *activeSubscription
-		switch {
-		case m.QueryID != nil:
-			sub = c.subscriptions[*m.QueryID]
-		case m.RequestID != nil:
-			sub = c.subForRequest(*m.RequestID)
-		}
-		if m.RequestID != nil {
-			delete(c.requestToQuery, *m.RequestID)
-		}
-		if sub != nil {
+	case *protocol.SubscriptionError:
+		// Resolve the failed subscription by query_set_id, fire onError, drop it.
+		if sub, ok := c.subscriptions[m.QuerySetID]; ok {
 			if sub.onError != nil {
-				sub.onError(&SubscriptionError{QuerySetID: sub.queryID, Message: m.Error})
+				sub.onError(&SubscriptionError{QuerySetID: m.QuerySetID, Message: m.Error})
 			}
-			delete(c.subscriptions, sub.queryID)
+			delete(c.subscriptions, m.QuerySetID)
 		}
 
-	case *protocol.OneOffQueryResponse:
-		// Match by message_id (first 8 bytes as uint64).
-		if len(m.MessageID) >= 8 {
-			key := binary.LittleEndian.Uint64(m.MessageID[:8])
-			if ch, ok := c.oneOffCallbacks[key]; ok {
-				if m.Error != nil {
-					ch <- oneOffResult{err: &ProtocolError{Message: *m.Error}}
-				} else {
-					var rows [][]byte
-					for _, table := range m.Tables {
+	case *protocol.ProcedureResult:
+		// Match by request_id and deliver the procedure result to the blocked
+		// CallProcedure caller. The result channel is buffered (cap 1), so a late
+		// result (after the caller's ctx was cancelled) never blocks this loop.
+		if ch, ok := c.procedureCallbacks[m.RequestID]; ok {
+			switch status := m.Status.(type) {
+			case *protocol.ProcedureReturned:
+				ch <- procedureResult{value: status.Value}
+			case *protocol.ProcedureInternalError:
+				ch <- procedureResult{err: &ProcedureError{Message: status.Message}}
+			default:
+				ch <- procedureResult{err: &ProtocolError{Message: "unknown procedure status"}}
+			}
+			delete(c.procedureCallbacks, m.RequestID)
+		}
+
+	case *protocol.OneOffQueryResult:
+		// Match by request_id.
+		if ch, ok := c.oneOffCallbacks[m.RequestID]; ok {
+			if m.Error != nil {
+				ch <- oneOffResult{err: &ProtocolError{Message: *m.Error}}
+			} else {
+				var rows [][]byte
+				if m.Rows != nil {
+					for _, table := range m.Rows.Tables {
 						if table.Rows != nil {
 							rows = append(rows, table.Rows.Rows()...)
 						}
 					}
-					ch <- oneOffResult{rows: rows}
 				}
-				delete(c.oneOffCallbacks, key)
+				ch <- oneOffResult{rows: rows}
 			}
+			delete(c.oneOffCallbacks, m.RequestID)
 		}
 	}
 }
 
-// applyV1DatabaseUpdate applies a v1 DatabaseUpdate to the cache.
-func (c *dbConnection) applyV1DatabaseUpdate(update *protocol.V1DatabaseUpdate) {
-	if update == nil {
+// applyQueryRows applies the initial rows of a SubscribeApplied as inserts.
+func (c *dbConnection) applyQueryRows(qr *protocol.QueryRows) {
+	if qr == nil {
 		return
 	}
-	for _, tableUpdate := range update.Tables {
-		tc := c.cache.GetTable(tableUpdate.TableName)
-		if tc == nil {
+	for _, table := range qr.Tables {
+		tc := c.cache.GetTable(table.TableName)
+		if tc == nil || table.Rows == nil {
 			continue
 		}
-		for _, cqu := range tableUpdate.Updates {
-			qu, err := protocol.DecompressV1QueryUpdate(cqu)
+		for _, rowData := range table.Rows.Rows() {
+			reader := bsatn.NewReader(rowData)
+			row, err := c.cache.DecodeRow(table.TableName, reader)
 			if err != nil {
 				continue
 			}
-			if qu == nil {
+			tc.ApplyInsert(rowData, row)
+		}
+	}
+}
+
+// applyQueryRowsAsDeletes removes the rows of a QueryRows (e.g. the dropped rows
+// returned by an UnsubscribeApplied) from the cache.
+func (c *dbConnection) applyQueryRowsAsDeletes(qr *protocol.QueryRows) {
+	if qr == nil {
+		return
+	}
+	for _, table := range qr.Tables {
+		tc := c.cache.GetTable(table.TableName)
+		if tc == nil || table.Rows == nil {
+			continue
+		}
+		for _, rowData := range table.Rows.Rows() {
+			reader := bsatn.NewReader(rowData)
+			row, err := c.cache.DecodeRow(table.TableName, reader)
+			if err != nil {
 				continue
 			}
+			tc.ApplyDelete(rowData, row)
+		}
+	}
+}
 
-			// Check if this table supports PK-based update detection
-			pkDef, hasPK := c.cache.GetTableDef(tableUpdate.TableName)
-
-			if hasPK && qu.Deletes != nil && qu.Inserts != nil &&
-				qu.Deletes.Len() > 0 && qu.Inserts.Len() > 0 {
-				c.applyPKUpdate(tc, pkDef, qu)
-			} else {
-				// Simple delete-then-insert
-				if qu.Deletes != nil {
-					for _, rowData := range qu.Deletes.Rows() {
-						reader := bsatn.NewReader(rowData)
-						row, err := c.cache.DecodeRow(tableUpdate.TableName, reader)
-						if err != nil {
-							continue
-						}
-						tc.ApplyDelete(rowData, row)
-					}
-				}
-				if qu.Inserts != nil {
-					for _, rowData := range qu.Inserts.Rows() {
-						reader := bsatn.NewReader(rowData)
-						row, err := c.cache.DecodeRow(tableUpdate.TableName, reader)
-						if err != nil {
-							continue
-						}
-						tc.ApplyInsert(rowData, row)
-					}
-				}
+// applyQuerySetUpdate applies the per-table row changes of one QuerySetUpdate to
+// the cache.
+func (c *dbConnection) applyQuerySetUpdate(qs *protocol.QuerySetUpdate) {
+	for ti := range qs.Tables {
+		tu := &qs.Tables[ti]
+		tc := c.cache.GetTable(tu.TableName)
+		if tc == nil {
+			continue
+		}
+		for _, rows := range tu.Rows {
+			switch r := rows.(type) {
+			case *protocol.PersistentTableRows:
+				c.applyPersistentRows(tu.TableName, tc, r)
+			case *protocol.EventTableRows:
+				c.applyEventRows(tu.TableName, tc, r)
 			}
 		}
 	}
 }
 
-// applyPKUpdate handles PK-based update detection for tables with primary keys.
-func (c *dbConnection) applyPKUpdate(tc cache.TableCache, pkDef cache.TableDefWithPK, qu *protocol.V1Uncompressed) {
+// applyPersistentRows applies inserts/deletes for a persistent table, using
+// primary-key based update detection when the table has a primary key.
+func (c *dbConnection) applyPersistentRows(tableName string, tc cache.TableCache, rows *protocol.PersistentTableRows) {
+	pkDef, hasPK := c.cache.GetTableDef(tableName)
+	if hasPK && rows.Deletes != nil && rows.Inserts != nil &&
+		rows.Deletes.Len() > 0 && rows.Inserts.Len() > 0 {
+		c.applyPKUpdate(tc, pkDef, rows.Inserts, rows.Deletes)
+		return
+	}
+	if rows.Deletes != nil {
+		for _, rowData := range rows.Deletes.Rows() {
+			reader := bsatn.NewReader(rowData)
+			row, err := c.cache.DecodeRow(tableName, reader)
+			if err != nil {
+				continue
+			}
+			tc.ApplyDelete(rowData, row)
+		}
+	}
+	if rows.Inserts != nil {
+		for _, rowData := range rows.Inserts.Rows() {
+			reader := bsatn.NewReader(rowData)
+			row, err := c.cache.DecodeRow(tableName, reader)
+			if err != nil {
+				continue
+			}
+			tc.ApplyInsert(rowData, row)
+		}
+	}
+}
+
+// applyEventRows delivers ephemeral event-table rows via OnEvent without
+// retaining them in the cache.
+func (c *dbConnection) applyEventRows(tableName string, tc cache.TableCache, rows *protocol.EventTableRows) {
+	if rows.Events == nil {
+		return
+	}
+	for _, rowData := range rows.Events.Rows() {
+		reader := bsatn.NewReader(rowData)
+		row, err := c.cache.DecodeRow(tableName, reader)
+		if err != nil {
+			continue
+		}
+		tc.ApplyEvent(rowData, row)
+	}
+}
+
+// applyPKUpdate handles PK-based update detection for tables with primary keys,
+// matching delete+insert pairs that share a primary key into a single update.
+func (c *dbConnection) applyPKUpdate(tc cache.TableCache, pkDef cache.TableDefWithPK, inserts, deletes *protocol.BsatnRowList) {
 	type deleteEntry struct {
 		rowBytes []byte
 		row      any
 	}
 	deletedByPK := map[any]deleteEntry{}
-	for _, rowData := range qu.Deletes.Rows() {
+	for _, rowData := range deletes.Rows() {
 		reader := bsatn.NewReader(rowData)
 		row, err := pkDef.DecodeRow(reader)
 		if err != nil {
@@ -596,7 +744,7 @@ func (c *dbConnection) applyPKUpdate(tc cache.TableCache, pkDef cache.TableDefWi
 		pk := pkDef.PrimaryKey(row)
 		deletedByPK[pk] = deleteEntry{rowData, row}
 	}
-	for _, rowData := range qu.Inserts.Rows() {
+	for _, rowData := range inserts.Rows() {
 		reader := bsatn.NewReader(rowData)
 		row, err := pkDef.DecodeRow(reader)
 		if err != nil {
@@ -615,21 +763,9 @@ func (c *dbConnection) applyPKUpdate(tc cache.TableCache, pkDef cache.TableDefWi
 	}
 }
 
-// subForRequest resolves the active subscription associated with a given
-// request_id via the requestToQuery map. It is only called from the Run()
-// goroutine. Returns nil if no subscription is tracked for that request.
-func (c *dbConnection) subForRequest(reqID uint32) *activeSubscription {
-	qid, ok := c.requestToQuery[reqID]
-	if !ok {
-		return nil
-	}
-	return c.subscriptions[qid]
-}
-
-// resubscribeAll re-sends a SubscribeMulti for every tracked subscription,
-// reusing each subscription's existing query_id. It is intended to be invoked
-// after a connection is (re)established so the server's subscription set is
-// restored.
+// resubscribeAll re-sends a Subscribe for every tracked subscription, reusing
+// each subscription's existing query_set_id. It is intended to be invoked after
+// a connection is (re)established so the server's subscription set is restored.
 //
 // NOTE: the client currently has no internal auto-reconnect loop — Run returns
 // when the connection is lost and the caller must rebuild. This method is wired
@@ -638,12 +774,11 @@ func (c *dbConnection) subForRequest(reqID uint32) *activeSubscription {
 func (c *dbConnection) resubscribeAll(ctx context.Context) error {
 	for qid, sub := range c.subscriptions {
 		reqID := c.nextRequestID.Add(1)
-		c.requestToQuery[reqID] = qid
 		sub.applied = false
-		msg := &protocol.SubscribeMulti{
-			QueryStrings: sub.queries,
+		msg := &protocol.Subscribe{
 			RequestID:    reqID,
-			QueryID:      qid,
+			QuerySetID:   qid,
+			QueryStrings: sub.queries,
 		}
 		if err := c.sendMessage(ctx, msg); err != nil {
 			return err
@@ -720,6 +855,7 @@ var (
 	_ SubscriptionHandle  = (*subscriptionHandle)(nil)
 	_ error               = (*ConnectionError)(nil)
 	_ error               = (*ReducerError)(nil)
+	_ error               = (*ProcedureError)(nil)
 	_ error               = (*SubscriptionError)(nil)
 	_ error               = (*ProtocolError)(nil)
 )

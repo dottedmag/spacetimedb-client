@@ -15,7 +15,7 @@
 //
 // # Protocol Negotiation
 //
-// Connections negotiate the v1.bsatn.spacetimedb WebSocket subprotocol by
+// Connections negotiate the v2.bsatn.spacetimedb WebSocket subprotocol by
 // default. The subprotocol can be overridden with
 // [ConnectionBuilder.WithProtocol] if needed.
 //

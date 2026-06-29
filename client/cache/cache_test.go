@@ -367,6 +367,34 @@ func TestTableCache_OnInsert_Callback(t *testing.T) {
 	assert.Equal(t, "alice", tr.Name)
 }
 
+func TestTableCache_OnEvent_NotRetained(t *testing.T) {
+	cc := cache.NewClientCache()
+	def := &testTableDef{name: "pings"}
+	cc.RegisterTable(def)
+
+	tc := cc.GetTable("pings")
+	require.NotNil(t, tc)
+
+	var got []*testRow
+	tc.OnEvent(func(row any) {
+		got = append(got, row.(*testRow))
+	})
+
+	for _, name := range []string{"a", "b"} {
+		rowBytes := encodeTestRow(1, name)
+		row, err := decodeRow(def, rowBytes)
+		require.NoError(t, err)
+		tc.ApplyEvent(rowBytes, row)
+	}
+
+	require.Len(t, got, 2, "event callback should fire once per event row")
+	assert.Equal(t, "a", got[0].Name)
+	assert.Equal(t, "b", got[1].Name)
+
+	// Event rows are ephemeral: they must not be retained in the cache.
+	assert.Equal(t, 0, tc.Count(), "event rows must not be stored")
+}
+
 func TestTableCache_OnDelete_Callback(t *testing.T) {
 	cc := cache.NewClientCache()
 	def := &testTableDef{name: "users"}

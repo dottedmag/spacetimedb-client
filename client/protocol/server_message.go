@@ -6,186 +6,158 @@ import (
 )
 
 // ServerMessage represents a message sent from the server to the client.
-// v1 ServerMessage<BsatnFormat> sum type:
+// v2 ServerMessage<BsatnFormat> sum type (v2.bsatn.spacetimedb):
 //
-//	Tag 0: InitialSubscription { database_update, request_id, total_host_execution_duration }
-//	Tag 1: TransactionUpdate { status, timestamp, caller_identity, caller_connection_id, reducer_call, energy_quanta_used, total_host_execution_duration }
-//	Tag 2: TransactionUpdateLight { request_id, update }
-//	Tag 3: IdentityToken { identity, token, connection_id }
-//	Tag 4: OneOffQueryResponse { message_id, error, tables, total_host_execution_duration }
-//	Tag 5: SubscribeApplied { request_id, total_host_execution_duration_micros, query_id, rows }
-//	Tag 6: UnsubscribeApplied { ... }
-//	Tag 7: SubscriptionError { ... }
-//	Tag 8: SubscribeMultiApplied { ... }
-//	Tag 9: UnsubscribeMultiApplied { ... }
-//	Tag 10: ProcedureResult { ... }
+//	Tag 0: InitialConnection  { identity, connection_id, token }
+//	Tag 1: SubscribeApplied   { request_id, query_set_id, rows }
+//	Tag 2: UnsubscribeApplied { request_id, query_set_id, rows: Option<QueryRows> }
+//	Tag 3: SubscriptionError  { request_id: Option<u32>, query_set_id, error }
+//	Tag 4: TransactionUpdate  { query_sets }
+//	Tag 5: OneOffQueryResult  { request_id, result: Result<QueryRows, String> }
+//	Tag 6: ReducerResult      { request_id, timestamp, result: ReducerOutcome }
+//	Tag 7: ProcedureResult    { status, timestamp, total_host_execution_duration, request_id }
 type ServerMessage interface {
 	serverMessageTag() uint8
 }
 
-// IdentityToken is sent upon a successful connection (tag 3 in v1).
-type IdentityToken struct {
+// InitialConnection is the first message sent upon a successful connection (tag 0).
+// It carries the client's identity, connection id, and auth token.
+type InitialConnection struct {
 	Identity     types.Identity
-	Token        string
 	ConnectionID types.ConnectionId
+	Token        string
 }
 
-func (*IdentityToken) serverMessageTag() uint8 { return 3 }
+func (*InitialConnection) serverMessageTag() uint8 { return 0 }
 
-// InitialSubscription is sent in response to a Subscribe message (tag 0 in v1).
-// Contains the initial matching rows for the entire subscription set.
-type InitialSubscription struct {
-	DatabaseUpdate V1DatabaseUpdate
-	RequestID      uint32
-	Duration       types.TimeDuration
+// SubscribeApplied is sent in response to a Subscribe message (tag 1), carrying
+// the initial matching rows for the query set.
+type SubscribeApplied struct {
+	RequestID  uint32
+	QuerySetID uint32
+	Rows       QueryRows
 }
 
-func (*InitialSubscription) serverMessageTag() uint8 { return 0 }
+func (*SubscribeApplied) serverMessageTag() uint8 { return 1 }
 
-// V1TransactionUpdate is sent after a reducer run (tag 1 in v1).
-// Contains full metadata about the reducer call and its result.
-type V1TransactionUpdate struct {
-	Status                     V1UpdateStatus
-	Timestamp                  types.Timestamp
-	CallerIdentity             types.Identity
-	CallerConnectionID         types.ConnectionId
-	ReducerCall                V1ReducerCallInfo
-	EnergyQuantaUsed           types.EnergyQuanta
-	TotalHostExecutionDuration types.TimeDuration
+// UnsubscribeApplied confirms removal of a query set (tag 2). Rows is non-nil
+// only when the Unsubscribe requested dropped rows via SendDroppedRows.
+type UnsubscribeApplied struct {
+	RequestID  uint32
+	QuerySetID uint32
+	Rows       *QueryRows
 }
 
-func (*V1TransactionUpdate) serverMessageTag() uint8 { return 1 }
+func (*UnsubscribeApplied) serverMessageTag() uint8 { return 2 }
 
-// V1TransactionUpdateLight is sent after a reducer run with minimal metadata (tag 2 in v1).
-type V1TransactionUpdateLight struct {
-	RequestID      uint32
-	DatabaseUpdate V1DatabaseUpdate
+// SubscriptionError notifies the client of a subscription failure (tag 3).
+// RequestID is nil when the failure occurred while computing a TransactionUpdate
+// rather than during initial application.
+type SubscriptionError struct {
+	RequestID  *uint32
+	QuerySetID uint32
+	Error      string
 }
 
-func (*V1TransactionUpdateLight) serverMessageTag() uint8 { return 2 }
+func (*SubscriptionError) serverMessageTag() uint8 { return 3 }
 
-// V1UpdateStatus is a sum type for the transaction status.
-// Tag 0 = Committed(DatabaseUpdate), Tag 1 = Failed(String), Tag 2 = OutOfEnergy.
-type V1UpdateStatus interface {
-	isV1UpdateStatus()
+// TransactionUpdate broadcasts row changes to the client's subscribed query sets
+// after a committed transaction (tag 4).
+type TransactionUpdate struct {
+	QuerySets []QuerySetUpdate
 }
 
-// V1Committed means the reducer succeeded and its changes were committed.
-type V1Committed struct {
-	DatabaseUpdate V1DatabaseUpdate
+func (*TransactionUpdate) serverMessageTag() uint8 { return 4 }
+
+// OneOffQueryResult is sent in response to a OneOffQuery (tag 5). Exactly one of
+// Rows (on success) or Error (on failure) is non-nil.
+type OneOffQueryResult struct {
+	RequestID uint32
+	Rows      *QueryRows
+	Error     *string
 }
 
-func (*V1Committed) isV1UpdateStatus() {}
+func (*OneOffQueryResult) serverMessageTag() uint8 { return 5 }
 
-// V1Failed means the reducer errored.
-type V1Failed struct {
+// ReducerResult is sent in response to a CallReducer message (tag 6), carrying
+// the reducer's exit status and, when committed, its transaction update.
+type ReducerResult struct {
+	RequestID uint32
+	Timestamp types.Timestamp
+	Outcome   ReducerOutcome
+}
+
+func (*ReducerResult) serverMessageTag() uint8 { return 6 }
+
+// ReducerOutcome is the v2 sum type for a reducer run result.
+// Tag 0 = Ok(ReducerOk), Tag 1 = OkEmpty, Tag 2 = Err(Bytes), Tag 3 = InternalError(String).
+type ReducerOutcome interface {
+	isReducerOutcome()
+}
+
+// ReducerOk means the reducer committed; it carries the BSATN return value and
+// the transaction update for the caller's query sets.
+type ReducerOk struct {
+	RetValue          []byte
+	TransactionUpdate TransactionUpdate
+}
+
+func (*ReducerOk) isReducerOutcome() {}
+
+// ReducerOkEmpty means the reducer committed with a zero-byte return value and an
+// empty transaction update (a wire-size optimization).
+type ReducerOkEmpty struct{}
+
+func (*ReducerOkEmpty) isReducerOutcome() {}
+
+// ReducerErr means the reducer returned a structured error and did not commit.
+// Value is the BSATN encoding of the reducer's error return type.
+type ReducerErr struct {
+	Value []byte
+}
+
+func (*ReducerErr) isReducerOutcome() {}
+
+// ReducerInternalError means the reducer panicked or failed due to a host error.
+type ReducerInternalError struct {
 	Message string
 }
 
-func (*V1Failed) isV1UpdateStatus() {}
+func (*ReducerInternalError) isReducerOutcome() {}
 
-// V1OutOfEnergy means the reducer ran out of energy.
-type V1OutOfEnergy struct{}
-
-func (*V1OutOfEnergy) isV1UpdateStatus() {}
-
-// V1ReducerCallInfo contains metadata about the reducer call.
-type V1ReducerCallInfo struct {
-	ReducerName string
-	ReducerID   uint32
-	Args        []byte // BSATN-encoded args
-	RequestID   uint32
+// ProcedureResult is sent in response to a CallProcedure message (tag 7).
+type ProcedureResult struct {
+	Status                     ProcedureStatus
+	Timestamp                  types.Timestamp
+	TotalHostExecutionDuration types.TimeDuration
+	RequestID                  uint32
 }
 
-// V1DatabaseUpdate is a collection of table updates.
-type V1DatabaseUpdate struct {
-	Tables []V1TableUpdate
+func (*ProcedureResult) serverMessageTag() uint8 { return 7 }
+
+// ProcedureStatus is the v2 sum type for a procedure run result.
+// Tag 0 = Returned(Bytes), Tag 1 = InternalError(String). (v2 has no OutOfEnergy variant.)
+type ProcedureStatus interface {
+	isProcedureStatus()
 }
 
-// V1TableUpdate describes row changes for a single table.
-type V1TableUpdate struct {
-	TableID   uint32
-	TableName string
-	NumRows   uint64
-	Updates   []V1CompressableQueryUpdate
+// ProcedureReturned means the procedure ran and returned the enclosed value.
+// Value is the BSATN encoding of the procedure's declared return type.
+type ProcedureReturned struct {
+	Value []byte
 }
 
-// V1CompressableQueryUpdate is a sum type for query updates.
-// Tag 0 = Uncompressed(QueryUpdate), Tag 1 = Brotli(Bytes), Tag 2 = Gzip(Bytes).
-type V1CompressableQueryUpdate interface {
-	isV1CompressableQueryUpdate()
+func (*ProcedureReturned) isProcedureStatus() {}
+
+// ProcedureInternalError means the call failed in the host, e.g. a type error or
+// unknown procedure name.
+type ProcedureInternalError struct {
+	Message string
 }
 
-// V1Uncompressed is an uncompressed query update.
-type V1Uncompressed struct {
-	Deletes *BsatnRowList
-	Inserts *BsatnRowList
-}
+func (*ProcedureInternalError) isProcedureStatus() {}
 
-func (*V1Uncompressed) isV1CompressableQueryUpdate() {}
-
-// V1CompressedBrotli is a brotli-compressed query update.
-type V1CompressedBrotli struct {
-	Data []byte
-}
-
-func (*V1CompressedBrotli) isV1CompressableQueryUpdate() {}
-
-// V1CompressedGzip is a gzip-compressed query update.
-type V1CompressedGzip struct {
-	Data []byte
-}
-
-func (*V1CompressedGzip) isV1CompressableQueryUpdate() {}
-
-// OneOffQueryResponse is sent in response to a OneOffQuery (tag 4 in v1).
-type OneOffQueryResponse struct {
-	MessageID []byte
-	Error     *string // Option<String>
-	Tables    []V1OneOffTable
-	Duration  types.TimeDuration
-}
-
-func (*OneOffQueryResponse) serverMessageTag() uint8 { return 4 }
-
-// V1OneOffTable is a table in a OneOffQueryResponse.
-type V1OneOffTable struct {
-	TableName string
-	Rows      *BsatnRowList
-}
-
-// SubscribeMultiApplied is sent in response to a SubscribeMulti message (tag 8 in v1).
-type SubscribeMultiApplied struct {
-	RequestID uint32
-	Duration  uint64
-	QueryID   uint32
-	Update    V1DatabaseUpdate
-}
-
-func (*SubscribeMultiApplied) serverMessageTag() uint8 { return 8 }
-
-// UnsubscribeMultiApplied is sent in response to an UnsubscribeMulti message (tag 9 in v1).
-type UnsubscribeMultiApplied struct {
-	RequestID uint32
-	Duration  uint64
-	QueryID   uint32
-	Update    V1DatabaseUpdate
-}
-
-func (*UnsubscribeMultiApplied) serverMessageTag() uint8 { return 9 }
-
-// V1SubscriptionError notifies the client of a subscription failure (tag 7 in v1).
-type V1SubscriptionError struct {
-	Duration  uint64
-	RequestID *uint32
-	QueryID   *uint32
-	TableID   *uint32
-	Error     string
-}
-
-func (*V1SubscriptionError) serverMessageTag() uint8 { return 7 }
-
-// ReadServerMessage reads a v1 ServerMessage from a BSATN reader by dispatching on the sum type tag.
+// ReadServerMessage reads a v2 ServerMessage from a BSATN reader by dispatching on the sum type tag.
 func ReadServerMessage(r bsatn.Reader) (ServerMessage, error) {
 	tag, err := r.GetSumTag()
 	if err != nil {
@@ -194,27 +166,21 @@ func ReadServerMessage(r bsatn.Reader) (ServerMessage, error) {
 
 	switch tag {
 	case 0:
-		return readInitialSubscription(r)
+		return readInitialConnection(r)
 	case 1:
-		return readV1TransactionUpdate(r)
+		return readSubscribeApplied(r)
 	case 2:
-		return readV1TransactionUpdateLight(r)
+		return readUnsubscribeApplied(r)
 	case 3:
-		return readIdentityToken(r)
+		return readSubscriptionError(r)
 	case 4:
-		return readOneOffQueryResponse(r)
+		return readTransactionUpdate(r)
 	case 5:
-		return readV1SubscribeApplied(r)
+		return readOneOffQueryResult(r)
 	case 6:
-		return readV1UnsubscribeApplied(r)
+		return readReducerResult(r)
 	case 7:
-		return readV1SubscriptionError(r)
-	case 8:
-		return readSubscribeMultiApplied(r)
-	case 9:
-		return readUnsubscribeMultiApplied(r)
-	case 10:
-		return readV1ProcedureResult(r)
+		return readProcedureResult(r)
 	default:
 		return nil, &bsatn.ErrInvalidTag{Tag: tag, SumName: "ServerMessage"}
 	}

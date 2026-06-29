@@ -5,65 +5,71 @@ import "go.digitalxero.dev/spacetimedb-client/bsatn"
 // ClientMessage represents a message sent from client to server.
 // It is a BSATN sum type with variants for each message kind.
 //
-// v1 ClientMessage enum:
+// v2 ClientMessage enum (v2.bsatn.spacetimedb):
 //
-//	Tag 0: CallReducer { reducer, args, request_id, flags }
-//	Tag 1: Subscribe { query_strings, request_id }
-//	Tag 2: OneOffQuery { message_id, query_string }
-//	Tag 3: SubscribeSingle { query, request_id, query_id }
-//	Tag 4: SubscribeMulti { query_strings, request_id, query_id }
-//	Tag 5: Unsubscribe { request_id, query_id }
-//	Tag 6: UnsubscribeMulti { request_id, query_id }
-//	Tag 7: CallProcedure { procedure, args, request_id, flags }
+//	Tag 0: Subscribe       { request_id, query_set_id, query_strings }
+//	Tag 1: Unsubscribe     { request_id, query_set_id, flags }
+//	Tag 2: OneOffQuery     { request_id, query_string }
+//	Tag 3: CallReducer     { request_id, flags, reducer, args }
+//	Tag 4: CallProcedure   { request_id, flags, procedure, args }
+//
+// Note: a v2 QuerySetId is a single-field product { id: u32 } and so encodes
+// as a bare u32 on the wire.
 type ClientMessage interface {
 	bsatn.Serializable
 	clientMessageTag() uint8
 }
 
-// CallReducer invokes a reducer (transactional database function).
-// Tag 0 in the v1 ClientMessage sum type.
-// Fields: reducer(String), args(Bytes), request_id(u32), flags(u8).
-type CallReducer struct {
-	Reducer   string
-	Args      []byte
-	RequestID uint32
-	Flags     uint8
-}
-
-func (*CallReducer) clientMessageTag() uint8 { return 0 }
-
-func (c *CallReducer) WriteBsatn(w bsatn.Writer) {
-	w.PutSumTag(0)
-	w.PutString(c.Reducer)
-	bsatn.WriteByteArray(w, c.Args)
-	w.PutU32(c.RequestID)
-	w.PutU8(c.Flags)
-}
-
-// Subscribe registers a set of SQL queries replacing the entire current subscription.
-// Tag 1 in the v1 ClientMessage sum type.
-// Fields: query_strings(Vec<String>), request_id(u32).
+// Subscribe registers a set of SQL queries as a query set identified by
+// QuerySetID. Tag 0 in the v2 ClientMessage sum type.
 type Subscribe struct {
-	QueryStrings []string
 	RequestID    uint32
+	QuerySetID   uint32
+	QueryStrings []string
 }
 
-func (*Subscribe) clientMessageTag() uint8 { return 1 }
+func (*Subscribe) clientMessageTag() uint8 { return 0 }
 
 func (s *Subscribe) WriteBsatn(w bsatn.Writer) {
-	w.PutSumTag(1)
+	w.PutSumTag(0)
+	w.PutU32(s.RequestID)
+	w.PutU32(s.QuerySetID)
 	w.PutArrayLen(uint32(len(s.QueryStrings)))
 	for _, q := range s.QueryStrings {
 		w.PutString(q)
 	}
-	w.PutU32(s.RequestID)
+}
+
+// UnsubscribeFlags is the v2 Unsubscribe flag enum (u8).
+// Default = 0; SendDroppedRows = 1 requests the server return the removed rows.
+type UnsubscribeFlags uint8
+
+const (
+	UnsubscribeDefault         UnsubscribeFlags = 0
+	UnsubscribeSendDroppedRows UnsubscribeFlags = 1
+)
+
+// Unsubscribe ends a previously-registered query set. Tag 1 in the v2
+// ClientMessage sum type.
+type Unsubscribe struct {
+	RequestID  uint32
+	QuerySetID uint32
+	Flags      UnsubscribeFlags
+}
+
+func (*Unsubscribe) clientMessageTag() uint8 { return 1 }
+
+func (u *Unsubscribe) WriteBsatn(w bsatn.Writer) {
+	w.PutSumTag(1)
+	w.PutU32(u.RequestID)
+	w.PutU32(u.QuerySetID)
+	w.PutU8(uint8(u.Flags))
 }
 
 // OneOffQuery runs a query once without subscribing to updates.
-// Tag 2 in the v1 ClientMessage sum type.
-// Fields: message_id(Bytes), query_string(String).
+// Tag 2 in the v2 ClientMessage sum type.
 type OneOffQuery struct {
-	MessageID   []byte
+	RequestID   uint32
 	QueryString string
 }
 
@@ -71,78 +77,44 @@ func (*OneOffQuery) clientMessageTag() uint8 { return 2 }
 
 func (o *OneOffQuery) WriteBsatn(w bsatn.Writer) {
 	w.PutSumTag(2)
-	bsatn.WriteByteArray(w, o.MessageID)
+	w.PutU32(o.RequestID)
 	w.PutString(o.QueryString)
 }
 
-// SubscribeMulti subscribes to a set of queries with a query_id (v1 multi-query subscription).
-// Tag 4 in the v1 ClientMessage sum type.
-// Fields: query_strings(Vec<String>), request_id(u32), query_id(u32).
-type SubscribeMulti struct {
-	QueryStrings []string
-	RequestID    uint32
-	QueryID      uint32
-}
-
-func (*SubscribeMulti) clientMessageTag() uint8 { return 4 }
-
-func (s *SubscribeMulti) WriteBsatn(w bsatn.Writer) {
-	w.PutSumTag(4)
-	w.PutArrayLen(uint32(len(s.QueryStrings)))
-	for _, q := range s.QueryStrings {
-		w.PutString(q)
-	}
-	w.PutU32(s.RequestID)
-	w.PutU32(s.QueryID)
-}
-
-// Unsubscribe removes a previously-registered subscription.
-// Tag 5 in the v1 ClientMessage sum type.
-// Fields: request_id(u32), query_id(u32).
-type Unsubscribe struct {
+// CallReducer invokes a reducer (transactional database function).
+// Tag 3 in the v2 ClientMessage sum type.
+type CallReducer struct {
 	RequestID uint32
-	QueryID   uint32
+	Flags     uint8
+	Reducer   string
+	Args      []byte
 }
 
-func (*Unsubscribe) clientMessageTag() uint8 { return 5 }
+func (*CallReducer) clientMessageTag() uint8 { return 3 }
 
-func (u *Unsubscribe) WriteBsatn(w bsatn.Writer) {
-	w.PutSumTag(5)
-	w.PutU32(u.RequestID)
-	w.PutU32(u.QueryID)
-}
-
-// UnsubscribeMulti removes a multi subscription.
-// Tag 6 in the v1 ClientMessage sum type.
-// Fields: request_id(u32), query_id(u32).
-type UnsubscribeMulti struct {
-	RequestID uint32
-	QueryID   uint32
-}
-
-func (*UnsubscribeMulti) clientMessageTag() uint8 { return 6 }
-
-func (u *UnsubscribeMulti) WriteBsatn(w bsatn.Writer) {
-	w.PutSumTag(6)
-	w.PutU32(u.RequestID)
-	w.PutU32(u.QueryID)
+func (c *CallReducer) WriteBsatn(w bsatn.Writer) {
+	w.PutSumTag(3)
+	w.PutU32(c.RequestID)
+	w.PutU8(c.Flags)
+	w.PutString(c.Reducer)
+	bsatn.WriteByteArray(w, c.Args)
 }
 
 // CallProcedure invokes a procedure (non-transactional database function).
-// Tag 7 in the v1 ClientMessage sum type.
+// Tag 4 in the v2 ClientMessage sum type.
 type CallProcedure struct {
-	Procedure string
-	Args      []byte
 	RequestID uint32
 	Flags     uint8
+	Procedure string
+	Args      []byte
 }
 
-func (*CallProcedure) clientMessageTag() uint8 { return 7 }
+func (*CallProcedure) clientMessageTag() uint8 { return 4 }
 
 func (c *CallProcedure) WriteBsatn(w bsatn.Writer) {
-	w.PutSumTag(7)
-	w.PutString(c.Procedure)
-	bsatn.WriteByteArray(w, c.Args)
+	w.PutSumTag(4)
 	w.PutU32(c.RequestID)
 	w.PutU8(c.Flags)
+	w.PutString(c.Procedure)
+	bsatn.WriteByteArray(w, c.Args)
 }

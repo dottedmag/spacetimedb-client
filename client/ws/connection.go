@@ -24,7 +24,7 @@ type Connection interface {
 // to a SpacetimeDB server. Use [NewConnection] to create a builder.
 //
 // At minimum, WithUri and WithDatabaseName must be set before calling Build.
-// The default protocol is "v1.bsatn.spacetimedb".
+// The default protocol is "v2.bsatn.spacetimedb".
 type ConnectionBuilder interface {
 	WithUri(uri string) ConnectionBuilder
 	WithDatabaseName(name string) ConnectionBuilder
@@ -35,7 +35,7 @@ type ConnectionBuilder interface {
 
 func NewConnection() ConnectionBuilder {
 	return &connectionBuilder{
-		protocol: "v1.bsatn.spacetimedb",
+		protocol: "v2.bsatn.spacetimedb",
 	}
 }
 

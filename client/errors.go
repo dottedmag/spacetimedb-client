@@ -31,6 +31,22 @@ func (e *ReducerError) Error() string {
 	return fmt.Sprintf("reducer %s error: %s", e.ReducerName, e.Message)
 }
 
+// ProcedureError represents a server-side procedure execution failure.
+// It is produced when the server reports a procedure call with a non-success
+// status: an internal/host error (e.g. a type error or unknown procedure name)
+// or an out-of-energy interruption.
+type ProcedureError struct {
+	ProcedureName string
+	Message       string
+}
+
+func (e *ProcedureError) Error() string {
+	if e.ProcedureName != "" {
+		return fmt.Sprintf("procedure %s error: %s", e.ProcedureName, e.Message)
+	}
+	return fmt.Sprintf("procedure error: %s", e.Message)
+}
+
 // SubscriptionError represents a server-side subscription failure.
 // It is produced when the server sends a V1SubscriptionError message
 // in response to a Subscribe or SubscribeMulti request.
