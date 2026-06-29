@@ -1,3 +1,15 @@
+- semver: 0.6.0
+  date: 2026-06-29T00:12:11.390124924Z
+  packager: Dj Gilcrease <digitalxero@gmail.com>
+  changes:
+    - commit: 981d352fa49767f6c59c0a8c44417050b4d153ff
+      note: 'feat: switch to v2 protocol'
+      author:
+        name: Dj Gilcrease
+        email: digitalxero@gmail.com
+      committer:
+        name: Dj Gilcrease
+        email: digitalxero@gmail.com
 - semver: 0.5.1
   date: 2026-06-26T09:01:28.79993242Z
   packager: Dj Gilcrease <digitalxero@gmail.com>
