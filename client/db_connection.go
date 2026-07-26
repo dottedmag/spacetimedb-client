@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync/atomic"
 
 	"go.digitalxero.dev/spacetimedb-client/bsatn"
@@ -406,6 +407,10 @@ func (c *dbConnection) readLoop(ctx context.Context) {
 	for {
 		data, err := c.ws.Recv(ctx)
 		if err != nil {
+			// DIAG: the reason the read loop is ending (and thus why Run reports the
+			// generic "connection lost"). ctx.Err() distinguishes an intentional
+			// shutdown from a real socket failure.
+			slog.Error("dbConnection.readLoop: Recv failed, ending net loop", "err", err, "ctxErr", ctx.Err())
 			return
 		}
 		c.incoming <- data
@@ -741,8 +746,7 @@ func (c *dbConnection) applyPKUpdate(tc cache.TableCache, pkDef cache.TableDefWi
 		if err != nil {
 			continue
 		}
-		pk := pkDef.PrimaryKey(row)
-		deletedByPK[pk] = deleteEntry{rowData, row}
+		deletedByPK[pkKey(pkDef.PrimaryKey(row))] = deleteEntry{rowData, row}
 	}
 	for _, rowData := range inserts.Rows() {
 		reader := bsatn.NewReader(rowData)
@@ -750,7 +754,7 @@ func (c *dbConnection) applyPKUpdate(tc cache.TableCache, pkDef cache.TableDefWi
 		if err != nil {
 			continue
 		}
-		pk := pkDef.PrimaryKey(row)
+		pk := pkKey(pkDef.PrimaryKey(row))
 		if old, isUpdate := deletedByPK[pk]; isUpdate {
 			tc.ApplyUpdate(old.rowBytes, old.row, rowData, row)
 			delete(deletedByPK, pk)

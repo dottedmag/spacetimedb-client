@@ -3,6 +3,7 @@ package ws
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	"github.com/coder/websocket"
@@ -102,7 +103,14 @@ func (c *connection) Send(ctx context.Context, data []byte) error {
 func (c *connection) Recv(ctx context.Context) ([]byte, error) {
 	_, data, err := c.conn.Read(ctx)
 	if err != nil {
+		// DIAG: surface WHY the read failed — a 33 MiB read-limit breach, a server
+		// close, a reset, etc. This error was previously swallowed by readLoop, which
+		// made every failure look like a generic "connection lost".
+		slog.Error("ws.Recv: read failed", "err", err, "closeStatus", websocket.CloseStatus(err))
 		return nil, err
+	}
+	if len(data) > 8*1024*1024 {
+		slog.Warn("ws.Recv: large server message", "bytes", len(data), "limitBytes", 33*1024*1024)
 	}
 	return data, nil
 }

@@ -5,8 +5,8 @@ go 1.25.0
 require (
 	github.com/andybalholm/brotli v1.1.1
 	github.com/coder/websocket v1.8.12
-	github.com/puzpuzpuz/xsync/v4 v4.1.0
-	github.com/stretchr/testify v1.10.0
+	github.com/puzpuzpuz/xsync/v4 v4.5.0
+	github.com/stretchr/testify v1.11.1
 )
 
 require (
