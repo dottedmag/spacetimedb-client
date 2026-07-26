@@ -1,3 +1,15 @@
+- semver: 0.6.1
+  date: 2026-07-26T02:41:15.403452472Z
+  packager: Dj Gilcrease <digitalxero@gmail.com>
+  changes:
+    - commit: 5a4fc34c2ec4658c476043a54fdf36a5dcfc9387
+      note: 'fix: applyPK was not applying properly'
+      author:
+        name: Dj Gilcrease
+        email: digitalxero@gmail.com
+      committer:
+        name: Dj Gilcrease
+        email: digitalxero@gmail.com
 - semver: 0.6.0
   date: 2026-06-29T00:12:11.390124924Z
   packager: Dj Gilcrease <digitalxero@gmail.com>
