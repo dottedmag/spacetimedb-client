@@ -567,8 +567,13 @@ func (c *dbConnection) dispatchServerMessage(msg protocol.ServerMessage) {
 				c.applyQuerySetUpdate(&outcome.TransactionUpdate.QuerySets[i])
 			}
 		case *protocol.ReducerErr:
+			// Value carries the reducer's own reason — a BSATN string holding the
+			// returned error's Error() text, which for modules that return coded
+			// errors is a stable code such as "conflict" or "rate_limited".
+			// Surfacing it lets a client tell the user what actually went wrong
+			// instead of a fixed sentence.
 			if c.onReducerError != nil {
-				c.onReducerError(&ReducerError{ReducerName: name, Message: "reducer returned an error"})
+				c.onReducerError(&ReducerError{ReducerName: name, Message: reducerErrMessage(outcome.Value)})
 			}
 		case *protocol.ReducerInternalError:
 			if c.onReducerError != nil {

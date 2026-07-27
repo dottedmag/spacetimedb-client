@@ -1,6 +1,11 @@
 package client
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+
+	"go.digitalxero.dev/spacetimedb-client/bsatn"
+)
 
 // ConnectionError represents a WebSocket connection or transport failure.
 // It wraps an underlying error accessible via [errors.Unwrap].
@@ -76,3 +81,27 @@ func (e *ProtocolError) Error() string {
 }
 
 func (e *ProtocolError) Unwrap() error { return e.Err }
+
+// reducerErrMessage decodes the payload a failed reducer returns. The module
+// writes its error text through the host as a BSATN string, so that is tried
+// first; a payload that is not a BSATN string is taken as raw UTF-8, which keeps
+// hosts that write the message plainly working. A reducer that failed without
+// saying why yields a fixed sentence, so the caller always has something to show.
+func reducerErrMessage(value []byte) string {
+	if decoded, err := bsatn.DecodeString(value); err == nil {
+		// A successful decode is authoritative: falling back to the raw bytes
+		// here would hand the caller the length prefix as if it were a message.
+		return reducerErrOrFallback(decoded)
+	}
+	return reducerErrOrFallback(string(value))
+}
+
+// reducerErrFallback is shown when the server gave no reason at all.
+const reducerErrFallback = "reducer returned an error"
+
+func reducerErrOrFallback(msg string) string {
+	if trimmed := strings.TrimSpace(msg); trimmed != "" {
+		return trimmed
+	}
+	return reducerErrFallback
+}
