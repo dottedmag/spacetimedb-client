@@ -1,4 +1,10 @@
 
+0.6.2
+=============
+2026-07-27
+
+* fix: make sure the actual db error is returned (a18f49ca)
+
 0.6.1
 =============
 2026-07-26

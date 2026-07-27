@@ -1,3 +1,15 @@
+- semver: 0.6.2
+  date: 2026-07-27T03:21:21.530669587Z
+  packager: Dj Gilcrease <digitalxero@gmail.com>
+  changes:
+    - commit: a18f49cae726f0190316664a456661e8233b7167
+      note: 'fix: make sure the actual db error is returned'
+      author:
+        name: Dj Gilcrease
+        email: digitalxero@gmail.com
+      committer:
+        name: Dj Gilcrease
+        email: digitalxero@gmail.com
 - semver: 0.6.1
   date: 2026-07-26T02:41:15.403452472Z
   packager: Dj Gilcrease <digitalxero@gmail.com>
