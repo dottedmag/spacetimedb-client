@@ -58,6 +58,53 @@ func newTestConnection(ws *fakeWS) *dbConnection {
 	}
 }
 
+func TestReadLoopCancellationWithFullIncoming(t *testing.T) {
+	fake := newFakeWS()
+	conn := newTestConnection(fake)
+	for range cap(conn.incoming) {
+		conn.incoming <- nil
+	}
+
+	const timeout = 2 * time.Second
+	ctx, cancel := context.WithTimeout(t.Context(), timeout)
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+			return
+		default:
+		}
+		// Release capacity only after observing the result, so cleanup cannot hide a stuck send.
+		select {
+		case <-conn.incoming:
+		default:
+		}
+		select {
+		case <-done:
+		case <-time.After(timeout):
+			t.Error("readLoop did not exit during cleanup")
+		}
+	})
+	go func() {
+		defer close(done)
+		conn.readLoop(ctx)
+	}()
+
+	// The unbuffered send confirms Recv accepted the frame before cancellation.
+	select {
+	case fake.recv <- []byte("frame"):
+	case <-ctx.Done():
+		t.Fatal("readLoop did not receive the frame")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(timeout):
+		t.Fatal("readLoop did not exit after cancellation with a full incoming queue")
+	}
+}
+
 // nextSent reads the next sent frame or fails the test on timeout.
 func nextSent(t *testing.T, f *fakeWS) []byte {
 	t.Helper()

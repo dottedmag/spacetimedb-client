@@ -413,7 +413,11 @@ func (c *dbConnection) readLoop(ctx context.Context) {
 			slog.Error("dbConnection.readLoop: Recv failed, ending net loop", "err", err, "ctxErr", ctx.Err())
 			return
 		}
-		c.incoming <- data
+		select {
+		case c.incoming <- data:
+		case <-ctx.Done():
+			return
+		}
 	}
 }
 
