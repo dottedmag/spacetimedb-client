@@ -1,3 +1,15 @@
+- semver: 0.8.0
+  date: 2026-10-13T19:49:11.391101187Z
+  packager: Dj Gilcrease <digitalxero@gmail.com>
+  changes:
+    - commit: 15025baaccc5b2503b12b241d0250cf1177a5527
+      note: 'feat: add automatic reconnect and token refresh for SpacetimeDB 2.12'
+      author:
+        name: Dj Gilcrease
+        email: digitalxero@gmail.com
+      committer:
+        name: Dj Gilcrease
+        email: digitalxero@gmail.com
 - semver: 0.7.0
   date: 2026-10-13T01:57:58.381196641Z
   packager: Dj Gilcrease <digitalxero@gmail.com>

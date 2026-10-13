@@ -1,4 +1,10 @@
 
+0.8.0
+=============
+2026-10-13
+
+* feat: add automatic reconnect and token refresh for SpacetimeDB 2.12 (15025baa)
+
 0.7.0
 =============
 2026-10-13
