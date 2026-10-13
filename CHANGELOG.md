@@ -1,4 +1,10 @@
 
+0.7.0
+=============
+2026-10-13
+
+* feat: support SpacetimeDB 2.11 and harden production use (865617cc)
+
 0.6.2
 =============
 2026-07-27
