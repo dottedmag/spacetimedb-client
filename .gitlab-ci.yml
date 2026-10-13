@@ -13,7 +13,7 @@ variables:
   GOPATH: $CI_PROJECT_DIR/.go
   GOCACHE: $CI_PROJECT_DIR/.cache/go-build
   # SpacetimeDB configuration
-  SPACETIMEDB_VERSION: "v2.11.0"
+  SPACETIMEDB_VERSION: "v2.12.0"
   SPACETIMEDB_URI: "ws://spacetimedb:3000"
 
 # Go build cache template

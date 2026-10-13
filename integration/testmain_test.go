@@ -29,7 +29,7 @@ func TestMain(m *testing.M) {
 	modulesPath := os.Getenv("SPACETIMEDB_MODULES_PATH")
 	repoRef := os.Getenv("SPACETIMEDB_REPO_REF")
 	if repoRef == "" {
-		repoRef = "v2.11.0"
+		repoRef = "v2.12.0"
 	}
 
 	modulesEnv := os.Getenv("SPACETIMEDB_MODULES")

@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -36,6 +37,10 @@ type DbConnectionBuilder interface {
 	WithUri(uri string) DbConnectionBuilder
 	WithDatabaseName(nameOrAddress string) DbConnectionBuilder
 	WithToken(token string) DbConnectionBuilder
+	// WithAutomaticReconnect preserves subscriptions and cache across transport loss.
+	WithAutomaticReconnect() DbConnectionBuilder
+	// WithTokenProvider obtains credentials before every connection attempt.
+	WithTokenProvider(fn func(context.Context) (string, error)) DbConnectionBuilder
 	WithCompression(c protocol.Compression) DbConnectionBuilder
 	OnConnect(fn func(conn DbConnection, identity types.Identity, token string)) DbConnectionBuilder
 	OnConnectError(fn func(err error)) DbConnectionBuilder
@@ -85,15 +90,27 @@ func NewDbConnection() DbConnectionBuilder {
 }
 
 type dbConnectionBuilder struct {
-	protocol       string
-	uri            string
-	database       string
-	token          string
-	compression    protocol.Compression
-	onConnect      func(DbConnection, types.Identity, string)
-	onConnectError func(error)
-	onDisconnect   func(DbConnection, error)
-	onReducerError func(error)
+	automaticReconnect bool
+	tokenProvider      func(context.Context) (string, error)
+	protocol           string
+	uri                string
+	database           string
+	token              string
+	compression        protocol.Compression
+	onConnect          func(DbConnection, types.Identity, string)
+	onConnectError     func(error)
+	onDisconnect       func(DbConnection, error)
+	onReducerError     func(error)
+}
+
+func (b *dbConnectionBuilder) WithAutomaticReconnect() DbConnectionBuilder {
+	b.automaticReconnect = true
+	return b
+}
+
+func (b *dbConnectionBuilder) WithTokenProvider(fn func(context.Context) (string, error)) DbConnectionBuilder {
+	b.tokenProvider = fn
+	return b
 }
 
 func (b *dbConnectionBuilder) WithUri(uri string) DbConnectionBuilder {
@@ -142,6 +159,9 @@ func (b *dbConnectionBuilder) OnReducerError(fn func(error)) DbConnectionBuilder
 }
 
 func (b *dbConnectionBuilder) Build(ctx context.Context) (DbConnection, error) {
+	// A built connection owns its settings even if the builder is reused.
+	settings := *b
+	b = &settings
 	if b.protocol == "" {
 		b.protocol = "v2.bsatn.spacetimedb"
 	}
@@ -158,13 +178,23 @@ func (b *dbConnectionBuilder) Build(ctx context.Context) (DbConnection, error) {
 	default:
 		return nil, &ConnectionError{Message: "unsupported compression"}
 	}
-	wsConn, err := ws.NewConnection().
-		WithUri(b.uri).
-		WithDatabaseName(b.database).
-		WithToken(b.token).
-		WithCompression(compression).
-		WithProtocol(b.protocol).
-		Build(ctx)
+	dial := func(ctx context.Context, token string) (ws.Connection, error) {
+		if b.tokenProvider != nil {
+			var err error
+			token, err = b.tokenProvider(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("token provider: %w", err)
+			}
+		}
+		return ws.NewConnection().
+			WithUri(b.uri).
+			WithDatabaseName(b.database).
+			WithToken(token).
+			WithCompression(compression).
+			WithProtocol(b.protocol).
+			Build(ctx)
+	}
+	wsConn, err := dial(ctx, b.token)
 	if err != nil {
 		if b.onConnectError != nil {
 			b.onConnectError(err)
@@ -173,16 +203,19 @@ func (b *dbConnectionBuilder) Build(ctx context.Context) (DbConnection, error) {
 	}
 
 	conn := &dbConnection{
-		protocol:       b.protocol,
-		ws:             wsConn,
-		cache:          cache.NewClientCache(),
-		commands:       make(chan *command, 256),
-		incoming:       make(chan []byte, 64),
-		compression:    b.compression,
-		onConnect:      b.onConnect,
-		onConnectError: b.onConnectError,
-		onDisconnect:   b.onDisconnect,
-		onReducerError: b.onReducerError,
+		automaticReconnect: b.automaticReconnect,
+		dial:               dial,
+		token:              b.token,
+		protocol:           b.protocol,
+		ws:                 wsConn,
+		cache:              cache.NewClientCache(),
+		commands:           make(chan *command, 256),
+		incoming:           make(chan []byte, 64),
+		compression:        b.compression,
+		onConnect:          b.onConnect,
+		onConnectError:     b.onConnectError,
+		onDisconnect:       b.onDisconnect,
+		onReducerError:     b.onReducerError,
 	}
 
 	return conn, nil
@@ -217,6 +250,7 @@ type command struct {
 // [SubscriptionBuilder.Build]. It is keyed by its server-side query_id and is
 // only ever accessed from the Run() goroutine event loop.
 type activeSubscription struct {
+	replaying bool
 	rows      map[string]map[string][]byte
 	handle    *subscriptionHandle
 	queryID   uint32
@@ -240,18 +274,24 @@ type procedureResult struct {
 }
 
 type dbConnection struct {
-	rowDecodeErr error // accessed only by the event loop
-	protocol     string
-	stateMu      sync.RWMutex
-	doneOnce     sync.Once
-	done         chan struct{}
-	started      atomic.Bool
-	closed       atomic.Bool
-	ws           ws.Connection
-	cache        cache.ClientCache
-	commands     chan *command
-	incoming     chan []byte
-	compression  protocol.Compression
+	disconnectSignal   chan struct{}
+	disconnectOnce     sync.Once
+	established        bool
+	automaticReconnect bool
+	dial               func(context.Context, string) (ws.Connection, error)
+	reconnecting       bool
+	rowDecodeErr       error // accessed only by the event loop
+	protocol           string
+	stateMu            sync.RWMutex
+	doneOnce           sync.Once
+	done               chan struct{}
+	started            atomic.Bool
+	closed             atomic.Bool
+	ws                 ws.Connection
+	cache              cache.ClientCache
+	commands           chan *command
+	incoming           chan []byte
+	compression        protocol.Compression
 
 	identity     types.Identity
 	connectionID types.ConnectionId
@@ -295,7 +335,7 @@ func (c *dbConnection) RegisterTable(def cache.TableDef) {
 }
 
 func (c *dbConnection) doneChannel() <-chan struct{} {
-	c.doneOnce.Do(func() { c.done = make(chan struct{}) })
+	c.doneOnce.Do(func() { c.done = make(chan struct{}); c.disconnectSignal = make(chan struct{}) })
 	return c.done
 }
 
@@ -434,7 +474,9 @@ func (c *dbConnection) Disconnect() error {
 		}
 		return nil
 	}
-	return c.enqueue(&command{typ: cmdDisconnect})
+	c.doneChannel()
+	c.disconnectOnce.Do(func() { close(c.disconnectSignal) })
+	return nil
 }
 
 // Run starts the single-goroutine event loop that processes all WebSocket
@@ -453,6 +495,15 @@ func (c *dbConnection) Run(ctx context.Context) (runErr error) {
 		return &ConnectionError{Message: "Run may only be called once on an open connection"}
 	}
 	c.doneChannel()
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		select {
+		case <-c.disconnectSignal:
+			cancel()
+		case <-runCtx.Done():
+		}
+	}()
 	c.active.Store(true)
 	defer c.active.Store(false)
 
@@ -463,27 +514,12 @@ func (c *dbConnection) Run(ctx context.Context) (runErr error) {
 	c.queryContexts = make(map[uint32]context.Context)
 	c.reducerNames = make(map[uint32]string)
 
-	// readCtx is derived from context.Background() rather than the caller's
-	// ctx so that context cancellation does not kill the TCP connection before
-	// the WebSocket close handshake can complete.
-	readCtx, readCancel := context.WithCancel(context.Background())
-	defer readCancel()
-
-	readDone := make(chan struct{})
-	var readErr error
-	go func() {
-		defer close(readDone)
-		readErr = c.readLoop(readCtx)
-	}()
-
 	defer func() {
 		c.active.Store(false)
 		if c.closed.CompareAndSwap(false, true) {
 			close(c.done)
 		}
-		readCancel()
 		_ = c.ws.Close()
-		<-readDone
 		pendingErr := runErr
 		if pendingErr == nil {
 			pendingErr = &ConnectionError{Message: "connection is closed"}
@@ -509,10 +545,54 @@ func (c *dbConnection) Run(ctx context.Context) (runErr error) {
 			c.onDisconnect(c, runErr)
 		}
 	}()
+	for {
+		err := c.runSession(runCtx)
+		select {
+		case <-c.disconnectSignal:
+			return nil
+		default:
+		}
+		var transport *ConnectionError
+		if !c.automaticReconnect || !errors.As(err, &transport) || ctx.Err() != nil {
+			return err
+		}
+		c.active.Store(false)
+		c.failPending(err)
+		if c.onDisconnect != nil {
+			c.onDisconnect(c, err)
+		}
+		if err := c.reconnect(runCtx); err != nil {
+			select {
+			case <-c.disconnectSignal:
+				return nil
+			default:
+			}
+			return err
+		}
+	}
+}
+
+func (c *dbConnection) runSession(ctx context.Context) error {
+	readCtx, readCancel := context.WithCancel(ctx)
+	readDone := make(chan struct{})
+	var readErr error
+	go func() {
+		defer close(readDone)
+		readErr = c.readLoop(readCtx)
+	}()
+	defer func() {
+		readCancel()
+		_ = c.ws.Close()
+		<-readDone
+	}()
 	cleanupTicker := time.NewTicker(time.Second)
 	defer cleanupTicker.Stop()
 
 	for {
+		commands := c.commands
+		if c.reconnecting {
+			commands = nil
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -530,7 +610,7 @@ func (c *dbConnection) Run(ctx context.Context) (runErr error) {
 				}
 			}
 
-		case cmd := <-c.commands:
+		case cmd := <-commands:
 			if err := c.handleCommand(ctx, cmd); err != nil {
 				return err
 			}
@@ -660,7 +740,10 @@ func (c *dbConnection) handleCommand(ctx context.Context, cmd *command) error {
 
 func (c *dbConnection) sendMessage(ctx context.Context, msg protocol.ClientMessage) error {
 	data := bsatn.Encode(msg)
-	return c.ws.Send(ctx, data)
+	if err := c.ws.Send(ctx, data); err != nil {
+		return &ConnectionError{Message: "send failed", Err: err}
+	}
+	return nil
 }
 
 func (c *dbConnection) handleIncoming(data []byte) error {
@@ -714,16 +797,44 @@ func (c *dbConnection) dispatchServerMessage(msg protocol.ServerMessage) {
 			}
 		}
 	case *protocol.InitialConnection:
+		if c.reconnecting && c.established && c.Identity().Bytes() != m.Identity.Bytes() {
+			c.rowDecodeErr = &ProtocolError{Message: "identity changed during reconnect"}
+			return
+		}
 		c.stateMu.Lock()
 		c.identity = m.Identity
 		c.connectionID = m.ConnectionID
 		c.token = m.Token
 		c.stateMu.Unlock()
+		c.established = true
+		if c.reconnecting {
+			replayCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			err := c.resubscribeAll(replayCtx)
+			cancel()
+			if err != nil {
+				c.rowDecodeErr = err
+				return
+			}
+			c.reconnecting = false
+		}
+		c.active.Store(true)
 		if c.onConnect != nil {
 			c.onConnect(c, m.Identity, m.Token)
 		}
 
 	case *protocol.SubscribeApplied:
+		if sub := c.subscriptions[m.QuerySetID]; sub != nil && sub.replaying {
+			c.reconcileSubscription(sub, &m.Rows)
+			if c.rowDecodeErr != nil {
+				return
+			}
+			sub.replaying = false
+			sub.applied = true
+			if sub.onApplied != nil {
+				sub.onApplied()
+			}
+			return
+		}
 		// Initial matching rows for a newly-applied query set: apply them as
 		// inserts and fire onApplied for the subscription keyed by query_set_id.
 		c.applyQueryRows(&m.Rows)
@@ -1036,13 +1147,9 @@ func (c *dbConnection) applyPKUpdate(tc cache.TableCache, pkDef cache.TableDefWi
 // resubscribeAll re-sends a Subscribe for every tracked subscription, reusing
 // each subscription's existing query_set_id. It is intended to be invoked after
 // a connection is (re)established so the server's subscription set is restored.
-//
-// NOTE: the client currently has no internal auto-reconnect loop — Run returns
-// when the connection is lost and the caller must rebuild. This method is wired
-// and ready for that future path; it is only meaningful once a reconnect
-// mechanism calls it.
 func (c *dbConnection) resubscribeAll(ctx context.Context) error {
 	for qid, sub := range c.subscriptions {
+		sub.replaying = true
 		reqID := c.nextRequestID.Add(1)
 		sub.applied = false
 		msg := &protocol.Subscribe{

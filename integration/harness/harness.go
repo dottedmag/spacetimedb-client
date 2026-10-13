@@ -37,7 +37,7 @@ type ServerHarness interface {
 func NewServerHarness() ServerHarnessBuilder {
 	return &serverHarness{
 		uri:     "ws://localhost:3000",
-		repoRef: "v2.11.0",
+		repoRef: "v2.12.0",
 	}
 }
 

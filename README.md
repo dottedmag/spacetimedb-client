@@ -4,13 +4,17 @@
 go get go.digitalxero.dev/spacetimedb-client
 ```
 
-A Go client library for [SpacetimeDB](https://spacetimedb.com) with real-time subscriptions, local row caching, and BSATN serialization over WebSocket. Targets **SpacetimeDB 2.11.0** and requires **Go 1.26.9+**.
+A Go client library for [SpacetimeDB](https://spacetimedb.com) with real-time subscriptions, local row caching, and BSATN serialization over WebSocket. Targets **SpacetimeDB 2.12.0** and requires **Go 1.26.9+**.
 
 ## Production use
 
 The default wire protocol is `v2.bsatn.spacetimedb`. Select `WithProtocol("v3.bsatn.spacetimedb")` for coalesced messages on current servers. Both protocols support no compression, Brotli, and gzip through `WithCompression`. HTTP/HTTPS server URLs are accepted alongside WS/WSS URLs; use HTTPS or WSS for remote deployments.
 
-Call `Run` exactly once and register table definitions before starting it. Calls and subscriptions may be queued before `Run`; the command queue is bounded and returns an error when full. Connection shutdown releases outstanding queries and procedures, invalidates subscription handles, and reports transport or protocol failures through `Run` and `OnDisconnect`. `OnConnectError` reports connection establishment failures. The client does not automatically reconnect: rebuild the connection with the saved `Token()` and register subscriptions again.
+Call `Run` exactly once and register table definitions before starting it. Calls and subscriptions may be queued before `Run`; the command queue is bounded and returns an error when full. Connection shutdown releases outstanding queries and procedures, invalidates subscription handles, and reports transport or protocol failures through `Run` and `OnDisconnect`. `OnConnectError` reports connection establishment failures.
+
+Opt in to automatic reconnect with `WithAutomaticReconnect()`. Transport failures retry with exponential backoff, retaining the connection object, cache, table handles, callbacks, and subscription handles. Active subscriptions replay under their existing IDs, and refreshed snapshots reconcile with cached rows without repeated insert callbacks for unchanged rows. `OnDisconnect` reports each loss; `OnConnect` runs again after the same identity reconnects. Protocol errors and changed identities terminate `Run`. `Disconnect` or context cancellation stops retries. Without this option, transport loss still ends `Run`.
+
+Use `WithTokenProvider(func(context.Context) (string, error))` for expiring credentials; it runs before the initial dial and each reconnect attempt. Otherwise reconnect uses the server-issued `Token()`. Reducers and procedures already sent are never retried because they may have committed; outstanding queries/procedures fail on loss, and outstanding reducers report an unknown execution outcome through `OnReducerError`.
 
 Use `OneOffQueryContext` and `CallProcedure` with deadlines for request cancellation. These methods wait for the event loop to receive a response; call them from a separate goroutine when initiating work inside a callback. Cancellation stops waiting, and does not undo a request already sent to the server. `ReducerError.Value` retains structured BSATN errors, while string errors also populate `Message`.
 
@@ -22,11 +26,11 @@ Validation commands:
 go test -race ./...
 go vet ./...
 go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
-# Requires a running 2.11.0 server, the spacetime CLI, and Rust's WASM target:
+# Requires a running 2.12.0 server, the spacetime CLI, and Rust's WASM target:
 go test -tags integration -race -count=1 -timeout=15m ./integration/...
 ```
 
-Integration setup or publish failures fail the test run. The upstream module fixture is pinned to `v2.11.0`; `SPACETIMEDB_REPO_REF` can override it for compatibility investigations.
+Integration setup or publish failures fail the test run. The upstream module fixture is pinned to `v2.12.0`; `SPACETIMEDB_REPO_REF` can override it for compatibility investigations.
 
 For released tags, the Rust fixture is copied outside the upstream workspace and built against the matching published SDK version. This avoids resolving unrelated server and JavaScript build dependencies. Set `SPACETIMEDB_WORKSPACE_SDK=true` to explicitly build against the cloned workspace SDK instead. Subprocess output waits are bounded after a context deadline.
 
