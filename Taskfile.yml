@@ -86,7 +86,7 @@ tasks:
       SPACETIMEDB_MODULES_PATH: '{{.SPACETIMEDB_MODULES_PATH | default ""}}'
       SPACETIMEDB_MODULES: '{{.SPACETIMEDB_MODULES | default "rust"}}'
     cmds:
-      - docker run -d --replace --name spacetimedb-integration -p {{.SPACETIMEDB_PORT}}:3000 clockworklabs/spacetime:v2.0.5 start --listen-addr 0.0.0.0:3000 --in-memory
+      - docker run -d --name spacetimedb-integration -p {{.SPACETIMEDB_PORT}}:3000 clockworklabs/spacetime:v2.11.0 start --listen-addr 0.0.0.0:3000 --in-memory
       - defer: docker rm -f spacetimedb-integration
       - |
         echo "Waiting for SpacetimeDB server on port {{.SPACETIMEDB_PORT}}..."

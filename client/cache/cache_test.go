@@ -16,6 +16,51 @@ type testRow struct {
 	Name string
 }
 
+func TestOverlappingSubscriptionsRetainRows(t *testing.T) {
+	cc := cache.NewClientCache()
+	def := &testTableDef{name: "users"}
+	cc.RegisterTable(def)
+	tc := cc.GetTable("users")
+	data := encodeTestRow(1, "alice")
+	row, err := decodeRow(def, data)
+	require.NoError(t, err)
+	inserts, deletes := 0, 0
+	tc.OnInsert(func(any) { inserts++ })
+	tc.OnDelete(func(any) { deletes++ })
+	tc.ApplyInsert(data, row)
+	tc.ApplyInsert(data, row)
+	require.Equal(t, 1, inserts)
+	tc.ApplyDelete(data, row)
+	require.Equal(t, 1, tc.Count())
+	require.Zero(t, deletes)
+	tc.ApplyDelete(data, row)
+	require.Zero(t, tc.Count())
+	require.Equal(t, 1, deletes)
+}
+
+func TestOverlappingUpdatesExposeOneCurrentRow(t *testing.T) {
+	cc := cache.NewClientCache()
+	def := &testTableDef{name: "users"}
+	cc.RegisterTable(def)
+	tc := cc.GetTable("users")
+	oldData := encodeTestRow(1, "alice")
+	oldRow, err := decodeRow(def, oldData)
+	require.NoError(t, err)
+	newData := encodeTestRow(1, "renamed")
+	newRow, err := decodeRow(def, newData)
+	require.NoError(t, err)
+	tc.ApplyInsert(oldData, oldRow)
+	tc.ApplyInsert(oldData, oldRow)
+	updates, deletes := 0, 0
+	tc.OnUpdate(func(any, any) { updates++; require.Equal(t, 1, tc.Count()) })
+	tc.OnDelete(func(any) { deletes++ })
+	tc.ApplyUpdate(oldData, oldRow, newData, newRow)
+	tc.ApplyDelete(oldData, oldRow)
+	require.Equal(t, 1, updates)
+	require.Zero(t, deletes)
+	require.Equal(t, 1, tc.Count())
+}
+
 // testTableDef implements cache.TableDef for testing.
 type testTableDef struct {
 	name string

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.digitalxero.dev/spacetimedb-client/client"
+	"go.digitalxero.dev/spacetimedb-client/client/protocol"
 	"go.digitalxero.dev/spacetimedb-client/types"
 )
 
@@ -25,6 +26,20 @@ func TestConnect_IsActive(t *testing.T) {
 	conn := connectAndRun(t, defaultDBName(t))
 
 	assert.True(t, conn.IsActive(), "connection should be active after connect")
+}
+
+func TestConnect_ProtocolAndCompression(t *testing.T) {
+	for _, wireProtocol := range []string{"v2.bsatn.spacetimedb", "v3.bsatn.spacetimedb"} {
+		for _, compression := range []protocol.Compression{protocol.CompressionNone, protocol.CompressionBrotli, protocol.CompressionGzip} {
+			t.Run(wireProtocol+"/"+string(rune('0'+compression)), func(t *testing.T) {
+				conn := connectAndRun(t, defaultDBName(t), func(builder client.DbConnectionBuilder) client.DbConnectionBuilder {
+					return builder.WithProtocol(wireProtocol).WithCompression(compression)
+				})
+				_, err := conn.OneOffQuery("SELECT * FROM one_u_8")
+				require.NoError(t, err)
+			})
+		}
+	}
 }
 
 func TestConnect_Disconnect(t *testing.T) {

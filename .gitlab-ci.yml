@@ -13,12 +13,12 @@ variables:
   GOPATH: $CI_PROJECT_DIR/.go
   GOCACHE: $CI_PROJECT_DIR/.cache/go-build
   # SpacetimeDB configuration
-  SPACETIMEDB_VERSION: "v2.0.5"
+  SPACETIMEDB_VERSION: "v2.11.0"
   SPACETIMEDB_URI: "ws://spacetimedb:3000"
 
 # Go build cache template
 .go_cache:
-  image: golang:1.25
+  image: golang:1.26.9
   cache:
     key: go-${CI_COMMIT_REF_SLUG}
     paths:
@@ -48,10 +48,6 @@ test:unit:
       echo "Total coverage: ${COVERAGE}%"
   coverage: '/total:\s+\(statements\)\s+(\d+\.\d+)%/'
   artifacts:
-    reports:
-      coverage_report:
-        coverage_format: cobertura
-        path: coverage.xml
     paths:
       - coverage.out
       - coverage.txt
@@ -59,7 +55,7 @@ test:unit:
     when: always
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_COMMIT_BRANCH != "main"
+    - if: '$CI_COMMIT_BRANCH && $CI_COMMIT_TAG == null'
     - if: $CI_COMMIT_TAG
       when: never
 
@@ -69,7 +65,7 @@ test:lint:
   stage: test
   before_script:
     - go version
-    - go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+    - go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
     - export PATH=$PATH:$(go env GOPATH)/bin
   script:
     - echo "Running linters and formatters..."
@@ -78,7 +74,7 @@ test:lint:
     - golangci-lint run --timeout=5m
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_COMMIT_BRANCH != "main"
+    - if: '$CI_COMMIT_BRANCH && $CI_COMMIT_TAG == null'
     - if: $CI_COMMIT_TAG
       when: never
 
@@ -100,7 +96,7 @@ test:modules:
     - echo "Go modules are tidy and verified"
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_COMMIT_BRANCH != "main"
+    - if: '$CI_COMMIT_BRANCH && $CI_COMMIT_TAG == null'
     - if: $CI_COMMIT_TAG
       when: never
 
@@ -119,7 +115,7 @@ test:build:
     - echo "All packages build successfully"
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_COMMIT_BRANCH != "main"
+    - if: '$CI_COMMIT_BRANCH && $CI_COMMIT_TAG == null'
     - if: $CI_COMMIT_TAG
       when: never
 
@@ -175,7 +171,7 @@ test:integration:
     - go test -tags integration -v -race -count=1 -timeout 10m ./integration/...
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_COMMIT_BRANCH != "main"
+    - if: '$CI_COMMIT_BRANCH && $CI_COMMIT_TAG == null'
     - if: $CI_COMMIT_TAG
       when: never
 
@@ -249,3 +245,13 @@ release:tag:
       when: never
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
   allow_failure: false
+
+# Fail builds with reachable known vulnerabilities.
+test:security:
+  extends: .go_cache
+  stage: test
+  script:
+    - go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH && $CI_COMMIT_TAG == null'

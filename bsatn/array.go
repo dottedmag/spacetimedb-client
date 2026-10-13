@@ -17,7 +17,9 @@ func ReadArray[T any](r Reader, readFn func(Reader) (T, error)) ([]T, error) {
 	if err != nil {
 		return nil, err
 	}
-	items := make([]T, 0, count)
+	// Grow only after decoding elements; an untrusted count must not allocate
+	// gigabytes before a truncated payload can be rejected.
+	items := make([]T, 0, min(count, 1024))
 	for i := uint32(0); i < count; i++ {
 		item, err := readFn(r)
 		if err != nil {

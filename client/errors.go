@@ -28,6 +28,8 @@ func (e *ConnectionError) Unwrap() error { return e.Err }
 // ReducerError represents a server-side reducer execution failure.
 // It is produced when the server reports a reducer call with status "failed".
 type ReducerError struct {
+	// Value preserves the BSATN structured error for application decoding.
+	Value       []byte
 	ReducerName string
 	Message     string
 }

@@ -181,6 +181,8 @@ func ReadServerMessage(r bsatn.Reader) (ServerMessage, error) {
 		return readReducerResult(r)
 	case 7:
 		return readProcedureResult(r)
+	case 8:
+		return readSubscribeBatchApplied(r)
 	default:
 		return nil, &bsatn.ErrInvalidTag{Tag: tag, SumName: "ServerMessage"}
 	}

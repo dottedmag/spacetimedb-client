@@ -15,6 +15,8 @@ import (
 type Compression uint8
 
 const (
+	// MaxMessageSize bounds both compressed frames and decompressed payloads.
+	MaxMessageSize = 33 * 1024 * 1024
 	// CompressionNone means no compression.
 	CompressionNone Compression = 0
 	// CompressionBrotli means brotli compression.
@@ -35,18 +37,32 @@ func DecompressMessage(data []byte) ([]byte, error) {
 
 	switch tag {
 	case CompressionNone:
+		if len(payload) > MaxMessageSize {
+			return nil, fmt.Errorf("protocol: message exceeds %d bytes", MaxMessageSize)
+		}
 		return payload, nil
 	case CompressionBrotli:
 		r := brotli.NewReader(bytes.NewReader(payload))
-		return io.ReadAll(r)
+		return readLimitedMessage(r)
 	case CompressionGzip:
 		gr, err := gzip.NewReader(bytes.NewReader(payload))
 		if err != nil {
 			return nil, fmt.Errorf("protocol: gzip init: %w", err)
 		}
 		defer func() { _ = gr.Close() }()
-		return io.ReadAll(gr)
+		return readLimitedMessage(gr)
 	default:
 		return nil, fmt.Errorf("protocol: unknown compression tag: %d", tag)
 	}
+}
+
+func readLimitedMessage(r io.Reader) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, MaxMessageSize+1))
+	if err != nil {
+		return nil, fmt.Errorf("protocol: decompress: %w", err)
+	}
+	if len(data) > MaxMessageSize {
+		return nil, fmt.Errorf("protocol: decompressed message exceeds %d bytes", MaxMessageSize)
+	}
+	return data, nil
 }

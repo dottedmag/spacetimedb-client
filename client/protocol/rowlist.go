@@ -1,6 +1,9 @@
 package protocol
 
-import "go.digitalxero.dev/spacetimedb-client/bsatn"
+import (
+	"fmt"
+	"go.digitalxero.dev/spacetimedb-client/bsatn"
+)
 
 // RowSizeHint describes how to determine row boundaries within packed row data.
 // It is a BSATN sum type: tag 0 = FixedSize(u16), tag 1 = RowOffsets(Vec<u64>).
@@ -51,6 +54,9 @@ func ReadBsatnRowList(r bsatn.Reader) (*BsatnRowList, error) {
 		if err != nil {
 			return nil, err
 		}
+		if err := checkArrayLength(r, count, 8); err != nil {
+			return nil, err
+		}
 		offsets := make([]uint64, count)
 		for i := uint32(0); i < count; i++ {
 			offsets[i], err = r.GetU64()
@@ -69,13 +75,48 @@ func ReadBsatnRowList(r bsatn.Reader) (*BsatnRowList, error) {
 		return nil, err
 	}
 
-	return &BsatnRowList{SizeHint: hint, RowsData: data}, nil
+	list := &BsatnRowList{SizeHint: hint, RowsData: data}
+	if err := list.Validate(); err != nil {
+		return nil, err
+	}
+	return list, nil
+}
+
+// Validate rejects invalid boundaries before they can reach the row cache.
+func (rl *BsatnRowList) Validate() error {
+	if rl == nil {
+		return nil
+	}
+	switch h := rl.SizeHint.(type) {
+	case FixedSizeHint:
+		if h.RowSize == 0 {
+			if len(rl.RowsData) == 0 {
+				return nil
+			}
+			return fmt.Errorf("protocol: zero row size with nonempty data")
+		}
+		if len(rl.RowsData)%int(h.RowSize) != 0 {
+			return fmt.Errorf("protocol: incomplete fixed-size row")
+		}
+	case RowOffsetsHint:
+		if len(h.Offsets) == 0 && len(rl.RowsData) != 0 {
+			return fmt.Errorf("protocol: row data without offsets")
+		}
+		for i, offset := range h.Offsets {
+			if offset > uint64(len(rl.RowsData)) || (i == 0 && offset != 0) || (i > 0 && offset < h.Offsets[i-1]) {
+				return fmt.Errorf("protocol: invalid row offset %d", offset)
+			}
+		}
+	default:
+		return fmt.Errorf("protocol: unknown row size hint")
+	}
+	return nil
 }
 
 // Rows splits the packed RowsData into individual row byte slices using
 // the SizeHint. Returns nil if the list is empty.
 func (rl *BsatnRowList) Rows() [][]byte {
-	if rl == nil || len(rl.RowsData) == 0 {
+	if rl == nil {
 		return nil
 	}
 
@@ -93,6 +134,9 @@ func (rl *BsatnRowList) Rows() [][]byte {
 	case RowOffsetsHint:
 		rows := make([][]byte, 0, len(h.Offsets))
 		for i, offset := range h.Offsets {
+			if offset > uint64(len(rl.RowsData)) {
+				continue
+			}
 			start := int(offset)
 			var end int
 			if i+1 < len(h.Offsets) {
@@ -100,7 +144,7 @@ func (rl *BsatnRowList) Rows() [][]byte {
 			} else {
 				end = len(rl.RowsData)
 			}
-			if start <= len(rl.RowsData) && end <= len(rl.RowsData) && start <= end {
+			if start >= 0 && end >= 0 && start <= len(rl.RowsData) && end <= len(rl.RowsData) && start <= end {
 				rows = append(rows, rl.RowsData[start:end])
 			}
 		}
@@ -111,7 +155,7 @@ func (rl *BsatnRowList) Rows() [][]byte {
 
 // Len returns the number of rows in the list.
 func (rl *BsatnRowList) Len() int {
-	if rl == nil || len(rl.RowsData) == 0 {
+	if rl == nil {
 		return 0
 	}
 

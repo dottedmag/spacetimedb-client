@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"sync/atomic"
+	"time"
 
 	"go.digitalxero.dev/spacetimedb-client/bsatn"
 	"go.digitalxero.dev/spacetimedb-client/client/cache"
@@ -29,6 +31,8 @@ import (
 //		}).
 //		Build(ctx)
 type DbConnectionBuilder interface {
+	// WithProtocol selects v2.bsatn.spacetimedb (default) or v3.bsatn.spacetimedb.
+	WithProtocol(protocol string) DbConnectionBuilder
 	WithUri(uri string) DbConnectionBuilder
 	WithDatabaseName(nameOrAddress string) DbConnectionBuilder
 	WithToken(token string) DbConnectionBuilder
@@ -65,6 +69,7 @@ type DbConnection interface {
 	CallReducer(reducer string, args bsatn.Serializable) error
 	CallProcedure(ctx context.Context, procedure string, args bsatn.Serializable) ([]byte, error)
 	OneOffQuery(query string) ([][]byte, error)
+	OneOffQueryContext(ctx context.Context, query string) ([][]byte, error)
 	Disconnect() error
 	Run(ctx context.Context) error
 	RegisterTable(def cache.TableDef)
@@ -80,6 +85,7 @@ func NewDbConnection() DbConnectionBuilder {
 }
 
 type dbConnectionBuilder struct {
+	protocol       string
 	uri            string
 	database       string
 	token          string
@@ -92,6 +98,11 @@ type dbConnectionBuilder struct {
 
 func (b *dbConnectionBuilder) WithUri(uri string) DbConnectionBuilder {
 	b.uri = uri
+	return b
+}
+
+func (b *dbConnectionBuilder) WithProtocol(protocol string) DbConnectionBuilder {
+	b.protocol = protocol
 	return b
 }
 
@@ -131,10 +142,28 @@ func (b *dbConnectionBuilder) OnReducerError(fn func(error)) DbConnectionBuilder
 }
 
 func (b *dbConnectionBuilder) Build(ctx context.Context) (DbConnection, error) {
+	if b.protocol == "" {
+		b.protocol = "v2.bsatn.spacetimedb"
+	}
+	if b.protocol != "v2.bsatn.spacetimedb" && b.protocol != "v3.bsatn.spacetimedb" {
+		return nil, &ConnectionError{Message: "unsupported protocol"}
+	}
+	compression := "none"
+	switch b.compression {
+	case protocol.CompressionNone:
+	case protocol.CompressionBrotli:
+		compression = "brotli"
+	case protocol.CompressionGzip:
+		compression = "gzip"
+	default:
+		return nil, &ConnectionError{Message: "unsupported compression"}
+	}
 	wsConn, err := ws.NewConnection().
 		WithUri(b.uri).
 		WithDatabaseName(b.database).
 		WithToken(b.token).
+		WithCompression(compression).
+		WithProtocol(b.protocol).
 		Build(ctx)
 	if err != nil {
 		if b.onConnectError != nil {
@@ -144,6 +173,7 @@ func (b *dbConnectionBuilder) Build(ctx context.Context) (DbConnection, error) {
 	}
 
 	conn := &dbConnection{
+		protocol:       b.protocol,
 		ws:             wsConn,
 		cache:          cache.NewClientCache(),
 		commands:       make(chan *command, 256),
@@ -171,6 +201,8 @@ const (
 )
 
 type command struct {
+	handle     *subscriptionHandle
+	ctx        context.Context
 	typ        commandType
 	reducer    string
 	args       []byte
@@ -185,6 +217,8 @@ type command struct {
 // [SubscriptionBuilder.Build]. It is keyed by its server-side query_id and is
 // only ever accessed from the Run() goroutine event loop.
 type activeSubscription struct {
+	rows      map[string]map[string][]byte
+	handle    *subscriptionHandle
 	queryID   uint32
 	queries   []string
 	onApplied func()
@@ -206,11 +240,18 @@ type procedureResult struct {
 }
 
 type dbConnection struct {
-	ws          ws.Connection
-	cache       cache.ClientCache
-	commands    chan *command
-	incoming    chan []byte
-	compression protocol.Compression
+	rowDecodeErr error // accessed only by the event loop
+	protocol     string
+	stateMu      sync.RWMutex
+	doneOnce     sync.Once
+	done         chan struct{}
+	started      atomic.Bool
+	closed       atomic.Bool
+	ws           ws.Connection
+	cache        cache.ClientCache
+	commands     chan *command
+	incoming     chan []byte
+	compression  protocol.Compression
 
 	identity     types.Identity
 	connectionID types.ConnectionId
@@ -230,17 +271,47 @@ type dbConnection struct {
 	subscriptions      map[uint32]*activeSubscription // keyed by query_set_id
 	oneOffCallbacks    map[uint32]chan any            // keyed by request_id
 	procedureCallbacks map[uint32]chan any            // keyed by request_id, for routing procedure results
-	reducerNames       map[uint32]string              // request_id -> reducer name, for reducer-result errors
+	procedureContexts  map[uint32]context.Context
+	queryContexts      map[uint32]context.Context
+	reducerNames       map[uint32]string // request_id -> reducer name, for reducer-result errors
 }
 
-func (c *dbConnection) Identity() types.Identity         { return c.identity }
-func (c *dbConnection) ConnectionId() types.ConnectionId { return c.connectionID }
-func (c *dbConnection) Token() string                    { return c.token }
-func (c *dbConnection) IsActive() bool                   { return c.active.Load() }
-func (c *dbConnection) Cache() cache.ClientCache         { return c.cache }
+func (c *dbConnection) Identity() types.Identity {
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
+	return c.identity
+}
+func (c *dbConnection) ConnectionId() types.ConnectionId {
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
+	return c.connectionID
+}
+func (c *dbConnection) Token() string            { c.stateMu.RLock(); defer c.stateMu.RUnlock(); return c.token }
+func (c *dbConnection) IsActive() bool           { return c.active.Load() }
+func (c *dbConnection) Cache() cache.ClientCache { return c.cache }
 
 func (c *dbConnection) RegisterTable(def cache.TableDef) {
 	c.cache.RegisterTable(def)
+}
+
+func (c *dbConnection) doneChannel() <-chan struct{} {
+	c.doneOnce.Do(func() { c.done = make(chan struct{}) })
+	return c.done
+}
+
+// enqueue never blocks the event loop when called from a callback.
+func (c *dbConnection) enqueue(cmd *command) error {
+	if c.closed.Load() {
+		return &ConnectionError{Message: "connection is closed"}
+	}
+	select {
+	case <-c.doneChannel():
+		return &ConnectionError{Message: "connection is closed"}
+	case c.commands <- cmd:
+		return nil
+	default:
+		return &ConnectionError{Message: "command queue is full"}
+	}
 }
 
 func (c *dbConnection) CallReducer(reducer string, args bsatn.Serializable) error {
@@ -250,12 +321,11 @@ func (c *dbConnection) CallReducer(reducer string, args bsatn.Serializable) erro
 		args.WriteBsatn(w)
 		encoded = w.Bytes()
 	}
-	c.commands <- &command{
+	return c.enqueue(&command{
 		typ:     cmdCallReducer,
 		reducer: reducer,
 		args:    encoded,
-	}
-	return nil
+	})
 }
 
 // CallProcedure invokes a procedure on the server and blocks until its result
@@ -271,6 +341,9 @@ func (c *dbConnection) CallReducer(reducer string, args bsatn.Serializable) erro
 // subscription callback), since it blocks waiting for that goroutine to process
 // the response.
 func (c *dbConnection) CallProcedure(ctx context.Context, procedure string, args bsatn.Serializable) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	var encoded []byte
 	if args != nil {
 		w := bsatn.NewWriter(64)
@@ -280,16 +353,15 @@ func (c *dbConnection) CallProcedure(ctx context.Context, procedure string, args
 
 	result := make(chan any, 1)
 	cmd := &command{
+		ctx:     ctx,
 		typ:     cmdCallProcedure,
 		reducer: procedure,
 		args:    encoded,
 		result:  result,
 	}
 
-	select {
-	case c.commands <- cmd:
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	if err := c.enqueue(cmd); err != nil {
+		return nil, err
 	}
 
 	select {
@@ -304,17 +376,37 @@ func (c *dbConnection) CallProcedure(ctx context.Context, procedure string, args
 		return r.value, r.err
 	case <-ctx.Done():
 		return nil, ctx.Err()
+	case <-c.doneChannel():
+		return nil, &ConnectionError{Message: "connection is closed"}
 	}
 }
 
 func (c *dbConnection) OneOffQuery(query string) ([][]byte, error) {
+	return c.OneOffQueryContext(context.Background(), query)
+}
+
+// OneOffQueryContext performs a query with an independently cancellable wait.
+func (c *dbConnection) OneOffQueryContext(ctx context.Context, query string) ([][]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	result := make(chan any, 1)
-	c.commands <- &command{
+	if err := c.enqueue(&command{
 		typ:     cmdOneOffQuery,
+		ctx:     ctx,
 		queries: []string{query},
 		result:  result,
+	}); err != nil {
+		return nil, err
 	}
-	resp := <-result
+	var resp any
+	select {
+	case resp = <-result:
+	case <-c.doneChannel():
+		return nil, &ConnectionError{Message: "connection is closed"}
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 	switch r := resp.(type) {
 	case oneOffResult:
 		return r.rows, r.err
@@ -331,8 +423,18 @@ func (c *dbConnection) Subscribe(queries ...string) SubscriptionBuilder {
 }
 
 func (c *dbConnection) Disconnect() error {
-	c.commands <- &command{typ: cmdDisconnect}
-	return nil
+	if c.closed.Load() {
+		return nil
+	}
+	if !c.started.Load() {
+		c.doneChannel()
+		if c.closed.CompareAndSwap(false, true) {
+			close(c.done)
+			return c.ws.Close()
+		}
+		return nil
+	}
+	return c.enqueue(&command{typ: cmdDisconnect})
 }
 
 // Run starts the single-goroutine event loop that processes all WebSocket
@@ -345,14 +447,20 @@ func (c *dbConnection) Disconnect() error {
 // not block for extended periods.
 //
 // Run must be called exactly once. Calling it again after it returns
-// is undefined behavior.
-func (c *dbConnection) Run(ctx context.Context) error {
+// returns a ConnectionError.
+func (c *dbConnection) Run(ctx context.Context) (runErr error) {
+	if !c.started.CompareAndSwap(false, true) || c.closed.Load() {
+		return &ConnectionError{Message: "Run may only be called once on an open connection"}
+	}
+	c.doneChannel()
 	c.active.Store(true)
 	defer c.active.Store(false)
 
 	c.subscriptions = make(map[uint32]*activeSubscription)
 	c.oneOffCallbacks = make(map[uint32]chan any)
 	c.procedureCallbacks = make(map[uint32]chan any)
+	c.procedureContexts = make(map[uint32]context.Context)
+	c.queryContexts = make(map[uint32]context.Context)
 	c.reducerNames = make(map[uint32]string)
 
 	// readCtx is derived from context.Background() rather than the caller's
@@ -362,48 +470,91 @@ func (c *dbConnection) Run(ctx context.Context) error {
 	defer readCancel()
 
 	readDone := make(chan struct{})
+	var readErr error
 	go func() {
 		defer close(readDone)
-		c.readLoop(readCtx)
+		readErr = c.readLoop(readCtx)
 	}()
 
-	shutdown := func(disconnectErr error) {
-		_ = c.ws.Close()
-		readCancel()
-		<-readDone
-		if c.onDisconnect != nil {
-			c.onDisconnect(c, disconnectErr)
+	defer func() {
+		c.active.Store(false)
+		if c.closed.CompareAndSwap(false, true) {
+			close(c.done)
 		}
-	}
+		readCancel()
+		_ = c.ws.Close()
+		<-readDone
+		pendingErr := runErr
+		if pendingErr == nil {
+			pendingErr = &ConnectionError{Message: "connection is closed"}
+		}
+		for _, ch := range c.oneOffCallbacks {
+			ch <- oneOffResult{err: pendingErr}
+		}
+		for _, ch := range c.procedureCallbacks {
+			ch <- procedureResult{err: pendingErr}
+		}
+		clear(c.oneOffCallbacks)
+		clear(c.procedureCallbacks)
+		clear(c.procedureContexts)
+		clear(c.queryContexts)
+		clear(c.reducerNames)
+		for _, sub := range c.subscriptions {
+			if sub.handle != nil {
+				sub.handle.active.Store(false)
+			}
+		}
+		clear(c.subscriptions)
+		if c.onDisconnect != nil {
+			c.onDisconnect(c, runErr)
+		}
+	}()
+	cleanupTicker := time.NewTicker(time.Second)
+	defer cleanupTicker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
-			shutdown(ctx.Err())
 			return ctx.Err()
+		case <-cleanupTicker.C:
+			for id, pendingCtx := range c.queryContexts {
+				if pendingCtx.Err() != nil {
+					delete(c.oneOffCallbacks, id)
+					delete(c.queryContexts, id)
+				}
+			}
+			for id, pendingCtx := range c.procedureContexts {
+				if pendingCtx.Err() != nil {
+					delete(c.procedureCallbacks, id)
+					delete(c.procedureContexts, id)
+				}
+			}
 
 		case cmd := <-c.commands:
 			if err := c.handleCommand(ctx, cmd); err != nil {
 				return err
 			}
 			if cmd.typ == cmdDisconnect {
-				shutdown(nil)
 				return nil
 			}
 
 		case msg := <-c.incoming:
-			c.handleIncoming(msg)
+			if err := c.handleIncoming(msg); err != nil {
+				return err
+			}
 
 		case <-readDone:
-			if c.onDisconnect != nil {
-				c.onDisconnect(c, &ConnectionError{Message: "connection lost"})
+			for len(c.incoming) > 0 {
+				if err := c.handleIncoming(<-c.incoming); err != nil {
+					return err
+				}
 			}
-			return &ConnectionError{Message: "connection lost"}
+			return &ConnectionError{Message: "connection lost", Err: readErr}
 		}
 	}
 }
 
-func (c *dbConnection) readLoop(ctx context.Context) {
+func (c *dbConnection) readLoop(ctx context.Context) error {
 	for {
 		data, err := c.ws.Recv(ctx)
 		if err != nil {
@@ -411,9 +562,13 @@ func (c *dbConnection) readLoop(ctx context.Context) {
 			// generic "connection lost"). ctx.Err() distinguishes an intentional
 			// shutdown from a real socket failure.
 			slog.Error("dbConnection.readLoop: Recv failed, ending net loop", "err", err, "ctxErr", ctx.Err())
-			return
+			return err
 		}
-		c.incoming <- data
+		select {
+		case c.incoming <- data:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 }
 
@@ -433,9 +588,15 @@ func (c *dbConnection) handleCommand(ctx context.Context, cmd *command) error {
 		return c.sendMessage(ctx, msg)
 
 	case cmdCallProcedure:
+		if cmd.ctx != nil && cmd.ctx.Err() != nil {
+			return nil
+		}
 		reqID := c.nextRequestID.Add(1)
 		if cmd.result != nil {
 			c.procedureCallbacks[reqID] = cmd.result
+			if cmd.ctx != nil {
+				c.procedureContexts[reqID] = cmd.ctx
+			}
 		}
 		msg := &protocol.CallProcedure{
 			RequestID: reqID,
@@ -454,6 +615,7 @@ func (c *dbConnection) handleCommand(ctx context.Context, cmd *command) error {
 			queries:   cmd.queries,
 			onApplied: cmd.onApplied,
 			onError:   cmd.onError,
+			handle:    cmd.handle,
 		}
 		msg := &protocol.Subscribe{
 			RequestID:    reqID,
@@ -469,14 +631,20 @@ func (c *dbConnection) handleCommand(ctx context.Context, cmd *command) error {
 		msg := &protocol.Unsubscribe{
 			RequestID:  reqID,
 			QuerySetID: cmd.querySetID,
-			Flags:      protocol.UnsubscribeDefault,
+			Flags:      protocol.UnsubscribeSendDroppedRows,
 		}
 		return c.sendMessage(ctx, msg)
 
 	case cmdOneOffQuery:
+		if cmd.ctx != nil && cmd.ctx.Err() != nil {
+			return nil
+		}
 		reqID := c.nextRequestID.Add(1)
 		if cmd.result != nil {
 			c.oneOffCallbacks[reqID] = cmd.result
+			if cmd.ctx != nil {
+				c.queryContexts[reqID] = cmd.ctx
+			}
 		}
 		msg := &protocol.OneOffQuery{
 			RequestID:   reqID,
@@ -495,25 +663,40 @@ func (c *dbConnection) sendMessage(ctx context.Context, msg protocol.ClientMessa
 	return c.ws.Send(ctx, data)
 }
 
-func (c *dbConnection) handleIncoming(data []byte) {
+func (c *dbConnection) handleIncoming(data []byte) error {
+	c.rowDecodeErr = nil
 	decompressed, err := protocol.DecompressMessage(data)
 	if err != nil {
-		if c.onConnectError != nil {
-			c.onConnectError(&ProtocolError{Message: "decompress error: " + err.Error()})
-		}
-		return
+		return &ProtocolError{Message: "decompress error", Err: err}
 	}
 
 	r := bsatn.NewReader(decompressed)
+	if c.protocol == "v3.bsatn.spacetimedb" {
+		if r.Remaining() == 0 {
+			return &ProtocolError{Message: "empty v3 payload"}
+		}
+		for r.Remaining() > 0 {
+			msg, err := protocol.ReadServerMessage(r)
+			if err != nil {
+				return &ProtocolError{Message: "read v3 server message", Err: err}
+			}
+			c.dispatchServerMessage(msg)
+			if c.rowDecodeErr != nil {
+				return c.rowDecodeErr
+			}
+		}
+		return nil
+	}
 	msg, err := protocol.ReadServerMessage(r)
 	if err != nil {
-		if c.onConnectError != nil {
-			c.onConnectError(&ProtocolError{Message: fmt.Sprintf("read server message error (len=%d): %s", len(decompressed), err.Error())})
-		}
-		return
+		return &ProtocolError{Message: fmt.Sprintf("read server message error (len=%d)", len(decompressed)), Err: err}
+	}
+	if r.Remaining() != 0 {
+		return &ProtocolError{Message: "trailing bytes in v2 server message"}
 	}
 
 	c.dispatchServerMessage(msg)
+	return c.rowDecodeErr
 }
 
 // dispatchServerMessage applies a decoded server message to connection state,
@@ -521,10 +704,21 @@ func (c *dbConnection) handleIncoming(data []byte) {
 // from the Run() goroutine event loop.
 func (c *dbConnection) dispatchServerMessage(msg protocol.ServerMessage) {
 	switch m := msg.(type) {
+	case *protocol.SubscribeBatchApplied:
+		for _, result := range m.Results {
+			if result.Rows != nil {
+				c.dispatchServerMessage(&protocol.SubscribeApplied{RequestID: m.RequestID, QuerySetID: result.QuerySetID, Rows: *result.Rows})
+			}
+			if result.Error != nil {
+				c.dispatchServerMessage(&protocol.SubscriptionError{RequestID: &m.RequestID, QuerySetID: result.QuerySetID, Error: *result.Error})
+			}
+		}
 	case *protocol.InitialConnection:
+		c.stateMu.Lock()
 		c.identity = m.Identity
 		c.connectionID = m.ConnectionID
 		c.token = m.Token
+		c.stateMu.Unlock()
 		if c.onConnect != nil {
 			c.onConnect(c, m.Identity, m.Token)
 		}
@@ -533,7 +727,13 @@ func (c *dbConnection) dispatchServerMessage(msg protocol.ServerMessage) {
 		// Initial matching rows for a newly-applied query set: apply them as
 		// inserts and fire onApplied for the subscription keyed by query_set_id.
 		c.applyQueryRows(&m.Rows)
+		if c.rowDecodeErr != nil {
+			return
+		}
 		if sub, ok := c.subscriptions[m.QuerySetID]; ok {
+			for _, table := range m.Rows.Tables {
+				c.trackSubscriptionRows(sub, table.TableName, table.Rows, nil)
+			}
 			sub.applied = true
 			if sub.onApplied != nil {
 				sub.onApplied()
@@ -546,12 +746,18 @@ func (c *dbConnection) dispatchServerMessage(msg protocol.ServerMessage) {
 		if m.Rows != nil {
 			c.applyQueryRowsAsDeletes(m.Rows)
 		}
+		if sub := c.subscriptions[m.QuerySetID]; sub != nil && sub.handle != nil {
+			sub.handle.active.Store(false)
+		}
 		delete(c.subscriptions, m.QuerySetID)
 
 	case *protocol.TransactionUpdate:
 		// Broadcast row changes for the client's subscribed query sets.
 		for i := range m.QuerySets {
 			c.applyQuerySetUpdate(&m.QuerySets[i])
+			if c.rowDecodeErr != nil {
+				return
+			}
 		}
 
 	case *protocol.ReducerResult:
@@ -565,6 +771,9 @@ func (c *dbConnection) dispatchServerMessage(msg protocol.ServerMessage) {
 		case *protocol.ReducerOk:
 			for i := range outcome.TransactionUpdate.QuerySets {
 				c.applyQuerySetUpdate(&outcome.TransactionUpdate.QuerySets[i])
+				if c.rowDecodeErr != nil {
+					return
+				}
 			}
 		case *protocol.ReducerErr:
 			// Value carries the reducer's own reason — a BSATN string holding the
@@ -573,7 +782,7 @@ func (c *dbConnection) dispatchServerMessage(msg protocol.ServerMessage) {
 			// Surfacing it lets a client tell the user what actually went wrong
 			// instead of a fixed sentence.
 			if c.onReducerError != nil {
-				c.onReducerError(&ReducerError{ReducerName: name, Message: reducerErrMessage(outcome.Value)})
+				c.onReducerError(&ReducerError{ReducerName: name, Message: reducerErrMessage(outcome.Value), Value: append([]byte(nil), outcome.Value...)})
 			}
 		case *protocol.ReducerInternalError:
 			if c.onReducerError != nil {
@@ -584,6 +793,21 @@ func (c *dbConnection) dispatchServerMessage(msg protocol.ServerMessage) {
 	case *protocol.SubscriptionError:
 		// Resolve the failed subscription by query_set_id, fire onError, drop it.
 		if sub, ok := c.subscriptions[m.QuerySetID]; ok {
+			if sub.handle != nil {
+				sub.handle.active.Store(false)
+			}
+			for tableName, rows := range sub.rows {
+				tc := c.cache.GetTable(tableName)
+				if tc == nil {
+					continue
+				}
+				for _, data := range rows {
+					row, err := c.cache.DecodeRow(tableName, bsatn.NewReader(data))
+					if err == nil {
+						tc.ApplyDelete(data, row)
+					}
+				}
+			}
 			if sub.onError != nil {
 				sub.onError(&SubscriptionError{QuerySetID: m.QuerySetID, Message: m.Error})
 			}
@@ -604,6 +828,7 @@ func (c *dbConnection) dispatchServerMessage(msg protocol.ServerMessage) {
 				ch <- procedureResult{err: &ProtocolError{Message: "unknown procedure status"}}
 			}
 			delete(c.procedureCallbacks, m.RequestID)
+			delete(c.procedureContexts, m.RequestID)
 		}
 
 	case *protocol.OneOffQueryResult:
@@ -623,8 +848,20 @@ func (c *dbConnection) dispatchServerMessage(msg protocol.ServerMessage) {
 				ch <- oneOffResult{rows: rows}
 			}
 			delete(c.oneOffCallbacks, m.RequestID)
+			delete(c.queryContexts, m.RequestID)
 		}
 	}
+}
+
+func (c *dbConnection) decodeCacheRow(table string, r bsatn.Reader) (any, error) {
+	row, err := c.cache.DecodeRow(table, r)
+	if err == nil && r.Remaining() != 0 {
+		err = fmt.Errorf("unexpected trailing row bytes")
+	}
+	if err != nil {
+		c.rowDecodeErr = &ProtocolError{Message: "decode row for " + table, Err: err}
+	}
+	return row, err
 }
 
 // applyQueryRows applies the initial rows of a SubscribeApplied as inserts.
@@ -639,9 +876,9 @@ func (c *dbConnection) applyQueryRows(qr *protocol.QueryRows) {
 		}
 		for _, rowData := range table.Rows.Rows() {
 			reader := bsatn.NewReader(rowData)
-			row, err := c.cache.DecodeRow(table.TableName, reader)
+			row, err := c.decodeCacheRow(table.TableName, reader)
 			if err != nil {
-				continue
+				return
 			}
 			tc.ApplyInsert(rowData, row)
 		}
@@ -661,9 +898,9 @@ func (c *dbConnection) applyQueryRowsAsDeletes(qr *protocol.QueryRows) {
 		}
 		for _, rowData := range table.Rows.Rows() {
 			reader := bsatn.NewReader(rowData)
-			row, err := c.cache.DecodeRow(table.TableName, reader)
+			row, err := c.decodeCacheRow(table.TableName, reader)
 			if err != nil {
-				continue
+				return
 			}
 			tc.ApplyDelete(rowData, row)
 		}
@@ -682,11 +919,35 @@ func (c *dbConnection) applyQuerySetUpdate(qs *protocol.QuerySetUpdate) {
 		for _, rows := range tu.Rows {
 			switch r := rows.(type) {
 			case *protocol.PersistentTableRows:
+				if sub := c.subscriptions[qs.QuerySetID]; sub != nil {
+					c.trackSubscriptionRows(sub, tu.TableName, r.Inserts, r.Deletes)
+				}
 				c.applyPersistentRows(tu.TableName, tc, r)
 			case *protocol.EventTableRows:
 				c.applyEventRows(tu.TableName, tc, r)
 			}
 		}
+	}
+}
+
+func (c *dbConnection) trackSubscriptionRows(sub *activeSubscription, table string, inserts, deletes *protocol.BsatnRowList) {
+	if c.cache.GetTable(table) == nil {
+		return
+	}
+	if sub.rows == nil {
+		sub.rows = make(map[string]map[string][]byte)
+	}
+	rows := sub.rows[table]
+	if rows == nil {
+		rows = make(map[string][]byte)
+		sub.rows[table] = rows
+	}
+	for _, data := range deletes.Rows() {
+		delete(rows, string(data))
+	}
+	for _, data := range inserts.Rows() {
+		key := string(data)
+		rows[key] = []byte(key)
 	}
 }
 
@@ -702,9 +963,9 @@ func (c *dbConnection) applyPersistentRows(tableName string, tc cache.TableCache
 	if rows.Deletes != nil {
 		for _, rowData := range rows.Deletes.Rows() {
 			reader := bsatn.NewReader(rowData)
-			row, err := c.cache.DecodeRow(tableName, reader)
+			row, err := c.decodeCacheRow(tableName, reader)
 			if err != nil {
-				continue
+				return
 			}
 			tc.ApplyDelete(rowData, row)
 		}
@@ -712,9 +973,9 @@ func (c *dbConnection) applyPersistentRows(tableName string, tc cache.TableCache
 	if rows.Inserts != nil {
 		for _, rowData := range rows.Inserts.Rows() {
 			reader := bsatn.NewReader(rowData)
-			row, err := c.cache.DecodeRow(tableName, reader)
+			row, err := c.decodeCacheRow(tableName, reader)
 			if err != nil {
-				continue
+				return
 			}
 			tc.ApplyInsert(rowData, row)
 		}
@@ -729,9 +990,9 @@ func (c *dbConnection) applyEventRows(tableName string, tc cache.TableCache, row
 	}
 	for _, rowData := range rows.Events.Rows() {
 		reader := bsatn.NewReader(rowData)
-		row, err := c.cache.DecodeRow(tableName, reader)
+		row, err := c.decodeCacheRow(tableName, reader)
 		if err != nil {
-			continue
+			return
 		}
 		tc.ApplyEvent(rowData, row)
 	}
@@ -747,17 +1008,17 @@ func (c *dbConnection) applyPKUpdate(tc cache.TableCache, pkDef cache.TableDefWi
 	deletedByPK := map[any]deleteEntry{}
 	for _, rowData := range deletes.Rows() {
 		reader := bsatn.NewReader(rowData)
-		row, err := pkDef.DecodeRow(reader)
+		row, err := c.decodeCacheRow(pkDef.TableName(), reader)
 		if err != nil {
-			continue
+			return
 		}
 		deletedByPK[pkKey(pkDef.PrimaryKey(row))] = deleteEntry{rowData, row}
 	}
 	for _, rowData := range inserts.Rows() {
 		reader := bsatn.NewReader(rowData)
-		row, err := pkDef.DecodeRow(reader)
+		row, err := c.decodeCacheRow(pkDef.TableName(), reader)
 		if err != nil {
-			continue
+			return
 		}
 		pk := pkKey(pkDef.PrimaryKey(row))
 		if old, isUpdate := deletedByPK[pk]; isUpdate {
@@ -815,41 +1076,51 @@ func (sb *subscriptionBuilder) OnError(fn func(error)) SubscriptionBuilder {
 }
 
 func (sb *subscriptionBuilder) Build() (SubscriptionHandle, error) {
+	if len(sb.queries) == 0 {
+		return nil, &SubscriptionError{Message: "at least one query is required"}
+	}
 	qsID := sb.conn.nextQuerySetID.Add(1)
+	handle := &subscriptionHandle{conn: sb.conn, querySetID: qsID}
+	handle.active.Store(true)
 
-	sb.conn.commands <- &command{
+	if err := sb.conn.enqueue(&command{
+		handle:     handle,
 		typ:        cmdSubscribe,
-		queries:    sb.queries,
+		queries:    append([]string(nil), sb.queries...),
 		querySetID: qsID,
 		onApplied:  sb.onApplied,
 		onError:    sb.onError,
+	}); err != nil {
+		return nil, err
 	}
-
-	return &subscriptionHandle{
-		conn:       sb.conn,
-		querySetID: qsID,
-		active:     true,
-	}, nil
+	return handle, nil
 }
 
 // subscriptionHandle implements SubscriptionHandle.
 type subscriptionHandle struct {
 	conn       *dbConnection
 	querySetID uint32
-	active     bool
+	active     atomic.Bool
 }
 
 func (sh *subscriptionHandle) Unsubscribe() error {
-	sh.active = false
-	sh.conn.commands <- &command{
+	if !sh.active.CompareAndSwap(true, false) {
+		return nil
+	}
+	if err := sh.conn.enqueue(&command{
 		typ:        cmdUnsubscribe,
 		querySetID: sh.querySetID,
+	}); err != nil {
+		if !sh.conn.closed.Load() {
+			sh.active.Store(true)
+		}
+		return err
 	}
 	return nil
 }
 
 func (sh *subscriptionHandle) IsActive() bool {
-	return sh.active
+	return sh.active.Load() && !sh.conn.closed.Load()
 }
 
 func (sh *subscriptionHandle) QueryID() uint32 {

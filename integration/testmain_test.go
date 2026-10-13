@@ -13,7 +13,7 @@ import (
 )
 
 var (
-	testHarness  harness.ServerHarness
+	testHarness   harness.ServerHarness
 	moduleHandles map[string]harness.ModuleHandle
 )
 
@@ -29,7 +29,7 @@ func TestMain(m *testing.M) {
 	modulesPath := os.Getenv("SPACETIMEDB_MODULES_PATH")
 	repoRef := os.Getenv("SPACETIMEDB_REPO_REF")
 	if repoRef == "" {
-		repoRef = "v2.0.5"
+		repoRef = "v2.11.0"
 	}
 
 	modulesEnv := os.Getenv("SPACETIMEDB_MODULES")
@@ -46,8 +46,8 @@ func TestMain(m *testing.M) {
 
 	h, err := builder.Build(ctx)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "SKIP: harness setup failed: %v\n", err)
-		os.Exit(0)
+		fmt.Fprintf(os.Stderr, "FAIL: harness setup failed: %v\n", err)
+		os.Exit(1)
 	}
 	testHarness = h
 
@@ -55,9 +55,9 @@ func TestMain(m *testing.M) {
 	for _, variant := range variants {
 		handle, err := h.PublishModule(ctx, variant)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "SKIP: failed to publish %s module: %v\n", variant, err)
+			fmt.Fprintf(os.Stderr, "FAIL: failed to publish %s module: %v\n", variant, err)
 			_ = h.Cleanup(ctx)
-			os.Exit(0)
+			os.Exit(1)
 		}
 		moduleHandles[variant] = handle
 		fmt.Printf("Published %s module as %s\n", variant, handle.DatabaseName())

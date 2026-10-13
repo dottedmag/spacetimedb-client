@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"sync"
 	"sync/atomic"
 
 	"github.com/puzpuzpuz/xsync/v4"
@@ -34,6 +35,7 @@ type TableCache interface {
 // newTableCache creates a new table cache.
 func newTableCache(def TableDef) *tableCache {
 	return &tableCache{
+		refs:            make(map[string]uint32),
 		def:             def,
 		rows:            xsync.NewMap[string, any](),
 		insertCallbacks: xsync.NewMap[CallbackID, InsertCallback](),
@@ -44,6 +46,8 @@ func newTableCache(def TableDef) *tableCache {
 }
 
 type tableCache struct {
+	mu              sync.Mutex
+	refs            map[string]uint32
 	def             TableDef
 	rows            *xsync.Map[string, any]
 	insertCallbacks *xsync.Map[CallbackID, InsertCallback]
@@ -99,7 +103,14 @@ func (tc *tableCache) RemoveCallback(id CallbackID) {
 // event loop and should not be called by application code.
 func (tc *tableCache) ApplyInsert(rowBytes []byte, row any) {
 	key := string(rowBytes)
+	tc.mu.Lock()
+	previous := tc.refs[key]
+	tc.refs[key]++
 	tc.rows.Store(key, row)
+	tc.mu.Unlock()
+	if previous > 0 {
+		return
+	}
 	tc.insertCallbacks.Range(func(_ CallbackID, cb InsertCallback) bool {
 		cb(row)
 		return true
@@ -111,7 +122,23 @@ func (tc *tableCache) ApplyInsert(rowBytes []byte, row any) {
 // event loop and should not be called by application code.
 func (tc *tableCache) ApplyDelete(rowBytes []byte, row any) {
 	key := string(rowBytes)
+	tc.mu.Lock()
+	if count := tc.refs[key]; count > 1 {
+		tc.refs[key]--
+		tc.mu.Unlock()
+		return
+	}
+	if tc.refs[key] == 0 {
+		tc.mu.Unlock()
+		return
+	}
+	delete(tc.refs, key)
+	_, visible := tc.rows.Load(key)
 	tc.rows.Delete(key)
+	tc.mu.Unlock()
+	if !visible {
+		return
+	}
 	tc.deleteCallbacks.Range(func(_ CallbackID, cb DeleteCallback) bool {
 		cb(row)
 		return true
@@ -122,8 +149,26 @@ func (tc *tableCache) ApplyDelete(rowBytes []byte, row any) {
 // all registered [UpdateCallback] functions. This is called internally by
 // the connection event loop and should not be called by application code.
 func (tc *tableCache) ApplyUpdate(oldRowBytes []byte, oldRow any, newRowBytes []byte, newRow any) {
-	tc.rows.Delete(string(oldRowBytes))
-	tc.rows.Store(string(newRowBytes), newRow)
+	oldKey, newKey := string(oldRowBytes), string(newRowBytes)
+	tc.mu.Lock()
+	if oldKey == newKey {
+		tc.rows.Store(newKey, newRow)
+		tc.mu.Unlock()
+		return
+	}
+	if tc.refs[oldKey] > 1 {
+		tc.refs[oldKey]--
+	} else {
+		delete(tc.refs, oldKey)
+	}
+	tc.rows.Delete(oldKey)
+	previous := tc.refs[newKey]
+	tc.refs[newKey]++
+	tc.rows.Store(newKey, newRow)
+	tc.mu.Unlock()
+	if previous > 0 {
+		return
+	}
 	tc.updateCallbacks.Range(func(_ CallbackID, cb UpdateCallback) bool {
 		cb(oldRow, newRow)
 		return true

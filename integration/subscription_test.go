@@ -4,6 +4,7 @@ package integration_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -22,6 +23,32 @@ func TestSubscribe_EmptyTable(t *testing.T) {
 	require.NotNil(t, tc, "table cache should exist after subscribe")
 	// Table may have rows from previous test runs; just verify the cache is accessible.
 	assert.GreaterOrEqual(t, tc.Count(), 0, "table count should be non-negative")
+}
+
+func TestSubscribe_OverlappingHandlesReleaseRows(t *testing.T) {
+	conn := connectAndRun(t, defaultDBName(t))
+	conn.RegisterTable(schema.OneU32Def)
+	require.NoError(t, conn.CallReducer("insert_one_u_32", schema.InsertOneU32Args(uint32(time.Now().UnixNano()))))
+	rows, err := conn.OneOffQuery("SELECT * FROM one_u_32")
+	require.NoError(t, err)
+	require.NotEmpty(t, rows)
+	applied1, applied2 := make(chan struct{}, 1), make(chan struct{}, 1)
+	h1, err := conn.Subscribe("SELECT * FROM one_u_32").OnApplied(func() { applied1 <- struct{}{} }).Build()
+	require.NoError(t, err)
+	waitFor(t, applied1, defaultTimeout)
+	h2, err := conn.Subscribe("SELECT * FROM one_u_32").OnApplied(func() { applied2 <- struct{}{} }).Build()
+	require.NoError(t, err)
+	waitFor(t, applied2, defaultTimeout)
+	tc := conn.Cache().GetTable("one_u_32")
+	require.Equal(t, len(rows), tc.Count())
+	require.NoError(t, h1.Unsubscribe())
+	_, err = conn.OneOffQuery("SELECT * FROM one_u_32")
+	require.NoError(t, err)
+	require.Equal(t, len(rows), tc.Count())
+	require.NoError(t, h2.Unsubscribe())
+	_, err = conn.OneOffQuery("SELECT * FROM one_u_32")
+	require.NoError(t, err)
+	require.Zero(t, tc.Count())
 }
 
 func TestSubscribe_WithExistingRows(t *testing.T) {

@@ -24,7 +24,7 @@ func ReadMap[K comparable, V any](r Reader, readK func(Reader) (K, error), readV
 	if err != nil {
 		return nil, err
 	}
-	m := make(map[K]V, count)
+	m := make(map[K]V, min(count, 1024))
 	for i := uint32(0); i < count; i++ {
 		k, err := readK(r)
 		if err != nil {

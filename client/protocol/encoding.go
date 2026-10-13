@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"fmt"
 	"go.digitalxero.dev/spacetimedb-client/bsatn"
 	"go.digitalxero.dev/spacetimedb-client/types"
 )
@@ -96,6 +97,9 @@ func readTransactionUpdate(r bsatn.Reader) (ServerMessage, error) {
 func readTransactionUpdateValue(r bsatn.Reader) (TransactionUpdate, error) {
 	n, err := r.GetArrayLen()
 	if err != nil {
+		return TransactionUpdate{}, err
+	}
+	if err := checkArrayLength(r, n, 8); err != nil {
 		return TransactionUpdate{}, err
 	}
 	querySets := make([]QuerySetUpdate, n)
@@ -253,6 +257,9 @@ func readQueryRows(r bsatn.Reader) (QueryRows, error) {
 	if err != nil {
 		return QueryRows{}, err
 	}
+	if err := checkArrayLength(r, n, 11); err != nil {
+		return QueryRows{}, err
+	}
 	tables := make([]SingleTableRows, n)
 	for i := uint32(0); i < n; i++ {
 		st, err := readSingleTableRows(r)
@@ -287,6 +294,9 @@ func readQuerySetUpdate(r bsatn.Reader) (QuerySetUpdate, error) {
 	if err != nil {
 		return QuerySetUpdate{}, err
 	}
+	if err := checkArrayLength(r, n, 8); err != nil {
+		return QuerySetUpdate{}, err
+	}
 	tables := make([]TableUpdate, n)
 	for i := uint32(0); i < n; i++ {
 		tu, err := readTableUpdate(r)
@@ -308,6 +318,9 @@ func readTableUpdate(r bsatn.Reader) (TableUpdate, error) {
 	if err != nil {
 		return TableUpdate{}, err
 	}
+	if err := checkArrayLength(r, n, 8); err != nil {
+		return TableUpdate{}, err
+	}
 	rows := make([]TableUpdateRows, n)
 	for i := uint32(0); i < n; i++ {
 		tur, err := readTableUpdateRows(r)
@@ -320,6 +333,13 @@ func readTableUpdate(r bsatn.Reader) (TableUpdate, error) {
 }
 
 // readTableUpdateRows reads a TableUpdateRows sum type.
+func checkArrayLength(r bsatn.Reader, count uint32, minSize int) error {
+	if uint64(count) > uint64(r.Remaining()/minSize) {
+		return fmt.Errorf("protocol: array length %d exceeds available payload", count)
+	}
+	return nil
+}
+
 // Tag 0 = PersistentTable(inserts, deletes), Tag 1 = EventTable(events).
 func readTableUpdateRows(r bsatn.Reader) (TableUpdateRows, error) {
 	tag, err := r.GetSumTag()

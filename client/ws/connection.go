@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strings"
 
 	"github.com/coder/websocket"
 )
@@ -31,6 +33,7 @@ type ConnectionBuilder interface {
 	WithDatabaseName(name string) ConnectionBuilder
 	WithToken(token string) ConnectionBuilder
 	WithProtocol(protocol string) ConnectionBuilder
+	WithCompression(compression string) ConnectionBuilder
 	Build(ctx context.Context) (Connection, error)
 }
 
@@ -41,10 +44,11 @@ func NewConnection() ConnectionBuilder {
 }
 
 type connectionBuilder struct {
-	uri      string
-	database string
-	token    string
-	protocol string
+	uri         string
+	database    string
+	token       string
+	protocol    string
+	compression string
 }
 
 func (b *connectionBuilder) WithUri(uri string) ConnectionBuilder {
@@ -67,9 +71,47 @@ func (b *connectionBuilder) WithProtocol(protocol string) ConnectionBuilder {
 	return b
 }
 
+func (b *connectionBuilder) WithCompression(compression string) ConnectionBuilder {
+	b.compression = compression
+	return b
+}
+
 func (b *connectionBuilder) Build(ctx context.Context) (Connection, error) {
 	// Build WebSocket URL: ws://{host}/v1/database/{database}/subscribe
-	wsURL := fmt.Sprintf("%s/v1/database/%s/subscribe", b.uri, b.database)
+	u, err := url.Parse(b.uri)
+	if err != nil || u.Host == "" || u.User != nil || u.Fragment != "" {
+		return nil, fmt.Errorf("ws: invalid server URI")
+	}
+	switch u.Scheme {
+	case "http":
+		u.Scheme = "ws"
+	case "https":
+		u.Scheme = "wss"
+	case "ws", "wss":
+	default:
+		return nil, fmt.Errorf("ws: URI scheme must be http, https, ws, or wss")
+	}
+	if strings.TrimSpace(b.database) == "" || b.protocol == "" {
+		return nil, fmt.Errorf("ws: database name and protocol are required")
+	}
+	basePath := strings.TrimRight(u.EscapedPath(), "/")
+	u.RawPath = basePath + "/v1/database/" + url.PathEscape(b.database) + "/subscribe"
+	u.Path, _ = url.PathUnescape(u.RawPath)
+	q := u.Query()
+	if b.compression != "" {
+		switch strings.ToLower(b.compression) {
+		case "none":
+			q.Set("compression", "None")
+		case "brotli":
+			q.Set("compression", "Brotli")
+		case "gzip":
+			q.Set("compression", "Gzip")
+		default:
+			return nil, fmt.Errorf("ws: unsupported compression %q", b.compression)
+		}
+	}
+	u.RawQuery = q.Encode()
+	wsURL := u.String()
 
 	// Set up headers
 	headers := http.Header{}
@@ -84,6 +126,10 @@ func (b *connectionBuilder) Build(ctx context.Context) (Connection, error) {
 	})
 	if err != nil {
 		return nil, fmt.Errorf("ws: dial failed: %w", err)
+	}
+	if conn.Subprotocol() != b.protocol {
+		_ = conn.CloseNow()
+		return nil, fmt.Errorf("ws: server did not negotiate protocol %q", b.protocol)
 	}
 
 	// Set reasonable read limit (33MB like Rust server)
@@ -101,13 +147,16 @@ func (c *connection) Send(ctx context.Context, data []byte) error {
 }
 
 func (c *connection) Recv(ctx context.Context) ([]byte, error) {
-	_, data, err := c.conn.Read(ctx)
+	typ, data, err := c.conn.Read(ctx)
 	if err != nil {
 		// DIAG: surface WHY the read failed — a 33 MiB read-limit breach, a server
 		// close, a reset, etc. This error was previously swallowed by readLoop, which
 		// made every failure look like a generic "connection lost".
 		slog.Error("ws.Recv: read failed", "err", err, "closeStatus", websocket.CloseStatus(err))
 		return nil, err
+	}
+	if typ != websocket.MessageBinary {
+		return nil, fmt.Errorf("ws: expected a binary message")
 	}
 	if len(data) > 8*1024*1024 {
 		slog.Warn("ws.Recv: large server message", "bytes", len(data), "limitBytes", 33*1024*1024)

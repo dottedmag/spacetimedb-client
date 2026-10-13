@@ -18,7 +18,7 @@ type reader struct {
 
 func (r *reader) readBytes(n int, forType string) ([]byte, error) {
 	remaining := len(r.data) - r.pos
-	if remaining < n {
+	if n < 0 || remaining < n {
 		return nil, &ErrBufferTooShort{
 			ForType:  forType,
 			Expected: n,

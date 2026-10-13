@@ -4,7 +4,31 @@
 go get go.digitalxero.dev/spacetimedb-client
 ```
 
-A Go client library for [SpacetimeDB](https://spacetimedb.com) with real-time subscriptions, local row caching, and BSATN serialization over WebSocket. Requires **Go 1.25+**.
+A Go client library for [SpacetimeDB](https://spacetimedb.com) with real-time subscriptions, local row caching, and BSATN serialization over WebSocket. Targets **SpacetimeDB 2.11.0** and requires **Go 1.26.9+**.
+
+## Production use
+
+The default wire protocol is `v2.bsatn.spacetimedb`. Select `WithProtocol("v3.bsatn.spacetimedb")` for coalesced messages on current servers. Both protocols support no compression, Brotli, and gzip through `WithCompression`. HTTP/HTTPS server URLs are accepted alongside WS/WSS URLs; use HTTPS or WSS for remote deployments.
+
+Call `Run` exactly once and register table definitions before starting it. Calls and subscriptions may be queued before `Run`; the command queue is bounded and returns an error when full. Connection shutdown releases outstanding queries and procedures, invalidates subscription handles, and reports transport or protocol failures through `Run` and `OnDisconnect`. `OnConnectError` reports connection establishment failures. The client does not automatically reconnect: rebuild the connection with the saved `Token()` and register subscriptions again.
+
+Use `OneOffQueryContext` and `CallProcedure` with deadlines for request cancellation. These methods wait for the event loop to receive a response; call them from a separate goroutine when initiating work inside a callback. Cancellation stops waiting, and does not undo a request already sent to the server. `ReducerError.Value` retains structured BSATN errors, while string errors also populate `Message`.
+
+Overlapping subscriptions retain each row until its final subscription releases it. Unsubscribing requests dropped rows so the cache is updated. Compressed frames are limited to 33 MiB after decompression, and invalid row boundaries or message lengths terminate the connection.
+
+Validation commands:
+
+```bash
+go test -race ./...
+go vet ./...
+go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+# Requires a running 2.11.0 server, the spacetime CLI, and Rust's WASM target:
+go test -tags integration -race -count=1 -timeout=15m ./integration/...
+```
+
+Integration setup or publish failures fail the test run. The upstream module fixture is pinned to `v2.11.0`; `SPACETIMEDB_REPO_REF` can override it for compatibility investigations.
+
+For released tags, the Rust fixture is copied outside the upstream workspace and built against the matching published SDK version. This avoids resolving unrelated server and JavaScript build dependencies. Set `SPACETIMEDB_WORKSPACE_SDK=true` to explicitly build against the cloned workspace SDK instead. Subprocess output waits are bounded after a context deadline.
 
 ## Quick Start
 
@@ -35,8 +59,14 @@ type playerDef struct{}
 func (playerDef) TableName() string { return "Player" }
 
 func (playerDef) DecodeRow(r bsatn.Reader) (any, error) {
-    id, _ := r.GetU64()
-    name, _ := r.GetString()
+    id, err := r.GetU64()
+    if err != nil {
+        return nil, err
+    }
+    name, err := r.GetString()
+    if err != nil {
+        return nil, err
+    }
     hp, err := r.GetU32()
     if err != nil {
         return nil, err
@@ -123,7 +153,7 @@ func main() {
 
 ### Event Loop Model
 
-`DbConnection.Run(ctx)` blocks on the calling goroutine and processes all WebSocket messages in a single goroutine. Commands like `CallReducer` and `Subscribe` are sent through an internal channel consumed by the event loop. This design eliminates the need for locks — all state mutations happen sequentially inside `Run`.
+`DbConnection.Run(ctx)` blocks on the calling goroutine and processes WebSocket messages, cache updates, and callbacks sequentially. Commands like `CallReducer` and `Subscribe` use a bounded queue consumed by the event loop. Identity access and cache reference counts use synchronization for concurrent readers.
 
 ### Builder Pattern
 

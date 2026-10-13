@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -36,7 +37,7 @@ type ServerHarness interface {
 func NewServerHarness() ServerHarnessBuilder {
 	return &serverHarness{
 		uri:     "ws://localhost:3000",
-		repoRef: "v2.0.5",
+		repoRef: "v2.11.0",
 	}
 }
 
@@ -50,6 +51,7 @@ type serverHarness struct {
 	tempDir      string
 	ownsTempDir  bool
 	publishedDBs []string
+	fixtureDirs  []string
 }
 
 func (h *serverHarness) WithUri(uri string) ServerHarnessBuilder {
@@ -108,6 +110,16 @@ func (h *serverHarness) PublishModule(ctx context.Context, variant string) (Modu
 	if _, err := os.Stat(projectPath); err != nil {
 		return nil, fmt.Errorf("module path not found: %s: %w", projectPath, err)
 	}
+	if variant == "rust" && h.ownsTempDir && os.Getenv("SPACETIMEDB_WORKSPACE_SDK") != "true" {
+		version := strings.TrimPrefix(h.repoRef, "v")
+		if regexp.MustCompile(`^\d+\.\d+\.\d+$`).MatchString(version) {
+			standalone, err := h.standaloneRustFixture(projectPath, version)
+			if err != nil {
+				return nil, err
+			}
+			projectPath = standalone
+		}
+	}
 
 	dbName := fmt.Sprintf("go-integ-%s-%d", variant, time.Now().UnixNano())
 
@@ -123,6 +135,7 @@ func (h *serverHarness) PublishModule(ctx context.Context, variant string) (Modu
 		"--yes",
 		dbName,
 	)
+	cmd.WaitDelay = 5 * time.Second
 	cmd.Env = ensureCargoInPath(append(os.Environ(), "NO_COLOR=1"))
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -149,6 +162,7 @@ func (h *serverHarness) Cleanup(ctx context.Context) error {
 	var errs []error
 	for _, db := range h.publishedDBs {
 		cmd := exec.CommandContext(ctx, "spacetime", "delete", db, "--server", httpURI)
+		cmd.WaitDelay = 5 * time.Second
 		cmd.Env = ensureCargoInPath(append(os.Environ(), "NO_COLOR=1"))
 		if output, err := cmd.CombinedOutput(); err != nil {
 			errs = append(errs, fmt.Errorf("delete %s: %w\noutput: %s", db, err, string(output)))
@@ -158,6 +172,11 @@ func (h *serverHarness) Cleanup(ctx context.Context) error {
 	if h.ownsTempDir && h.tempDir != "" {
 		if err := os.RemoveAll(h.tempDir); err != nil {
 			errs = append(errs, fmt.Errorf("remove temp dir: %w", err))
+		}
+	}
+	for _, dir := range h.fixtureDirs {
+		if err := os.RemoveAll(dir); err != nil {
+			errs = append(errs, fmt.Errorf("remove fixture dir: %w", err))
 		}
 	}
 
@@ -207,6 +226,7 @@ func (h *serverHarness) cloneModules(ctx context.Context) (string, error) {
 		"https://github.com/clockworklabs/SpacetimeDB.git",
 		tmpDir,
 	)
+	cmd.WaitDelay = 5 * time.Second
 	cmd.Env = ensureCargoInPath(append(os.Environ(), "NO_COLOR=1"))
 	if output, err := cmd.CombinedOutput(); err != nil {
 		_ = os.RemoveAll(tmpDir)
@@ -214,6 +234,39 @@ func (h *serverHarness) cloneModules(ctx context.Context) (string, error) {
 	}
 
 	return tmpDir, nil
+}
+
+// standaloneRustFixture excludes unrelated upstream workspace dependencies.
+func (h *serverHarness) standaloneRustFixture(source, version string) (string, error) {
+	dir, err := os.MkdirTemp("", "spacetimedb-rust-fixture-*")
+	if err != nil {
+		return "", err
+	}
+	if err := os.CopyFS(dir, os.DirFS(source)); err != nil {
+		_ = os.RemoveAll(dir)
+		return "", fmt.Errorf("copy Rust fixture: %w", err)
+	}
+	manifest := fmt.Sprintf(`[package]
+name = "sdk-test-module"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+anyhow = "1.0.68"
+paste = "1.0"
+spacetimedb = { version = "=%s", features = ["unstable"] }
+`, version)
+	if err := os.WriteFile(filepath.Join(dir, "Cargo.toml"), []byte(manifest), 0600); err != nil {
+		_ = os.RemoveAll(dir)
+		return "", err
+	}
+	h.fixtureDirs = append(h.fixtureDirs, dir)
+	return dir, nil
 }
 
 // variantSubdir returns the module subdirectory for a variant name.
