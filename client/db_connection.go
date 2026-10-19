@@ -58,8 +58,13 @@ type DbConnectionBuilder interface {
 	// OnTxFinish runs after the batch, including when row decoding fails.
 	// A nonnil error means the cache may be partially updated and Run will stop.
 	// Both hooks run synchronously in Run; they must not wait for SDK responses.
+	// RunSubscription also brackets readiness loss with these hooks, passing the
+	// disconnect error to finish even when the session will reconnect.
 	OnTxFinish(fn func(err error)) DbConnectionBuilder
 	Build(ctx context.Context) (DbConnection, error)
+	// RunSubscription owns a connection and subscription until ctx is cancelled
+	// or its consumer finishes. It retries failed sessions and reconnects transport.
+	RunSubscription(ctx context.Context, options ManagedSubscriptionOptions) error
 }
 
 // DbConnection is the primary interface for interacting with a SpacetimeDB

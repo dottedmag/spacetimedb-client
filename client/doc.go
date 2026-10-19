@@ -80,6 +80,30 @@
 //
 // # Subscriptions
 //
+// For a long-lived subscription, [DbConnectionBuilder.RunSubscription] owns
+// initial connection retries, event-loop startup, subscription application,
+// automatic transport reconnects, and fresh sessions after terminal errors.
+// Initial connection and application have ten-second deadlines. Reconnect dials
+// and their identity-message waits inherit the 24-hour session deadline; after
+// identity confirmation, replay application has a ten-second deadline. Cancel
+// the runner's context to stop and join the session.
+// A successful Observe callback also finishes the runner. Mutations are never
+// retried by the runner: their ordering and unknown outcomes remain the caller's
+// responsibility.
+//
+// [ManagedSubscriptionOptions.Initialize] registers table definitions before
+// the receive loop starts. The optional Observe callback starts after the first
+// complete application and runs separately from the receive loop, so it may
+// wait for procedure responses. It must return when its context is cancelled.
+//
+// [ManagedSubscription.Ready] becomes true only after a successful application
+// batch. It becomes false on disconnect, decode failure, subscription failure,
+// and retirement. Managed sessions use the configured OnTxStart/OnTxFinish hooks
+// for readiness invalidation too, including when no cache rows change. Observe
+// Ready and related cache rows under the same mutex used by those hooks. The
+// coalesced Changes channel is notified after OnTxFinish releases that mutex.
+// These signals do not preserve every intermediate transaction across reconnects.
+//
 // [DbConnection.Subscribe] accepts one or more SQL queries and returns a
 // [SubscriptionBuilder]. Call OnApplied to register a callback that fires
 // once the server has applied the initial subscription rows to the local
