@@ -55,6 +55,29 @@
 // [DbConnection.CallReducer] and [DbConnection.Subscribe] send requests
 // through an internal channel that Run consumes.
 //
+// # Cache update boundaries
+//
+// [DbConnectionBuilder.OnTxStart] and [DbConnectionBuilder.OnTxFinish] bracket
+// each complete cache update batch, including its row and subscription callbacks.
+// A batch contains all query sets changed by a committed transaction, or an
+// initial/replayed subscription snapshot, unsubscribe, or subscription cleanup.
+// A batched subscription response has one boundary around all its results.
+// These are local application boundaries; the remote transaction already committed.
+// Independent connections do not share a database transaction offset.
+//
+// Row callbacks may observe a partly applied batch. A successful finish callback
+// sees the complete result before Run applies another batch. Finish is also
+// called on row decoding failure with a nonnil error: the cache may then be
+// partially updated and must not be consumed; Run terminates that session.
+//
+// To make reads from other goroutines coherent, acquire a shared mutex in start
+// and release it in finish. Readers hold the same mutex across related cache
+// reads. Callbacks inside the batch already hold it and must not acquire it again.
+// Do not wait for SDK responses in these callbacks or while holding that mutex.
+// Transport, lifecycle callbacks, and procedure/query response delivery are outside
+// the cache update boundaries. Reconnect snapshots reflect current state rather
+// than replaying every transaction missed while disconnected.
+//
 // # Subscriptions
 //
 // [DbConnection.Subscribe] accepts one or more SQL queries and returns a

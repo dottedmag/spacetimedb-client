@@ -51,6 +51,14 @@ type DbConnectionBuilder interface {
 	// OnConnectError: a reducer failure does not affect the connection, so the
 	// handler should not treat it as fatal. The error is a [*ReducerError].
 	OnReducerError(fn func(err error)) DbConnectionBuilder
+	// OnTxStart runs before a complete cache update batch and its row and
+	// subscription callbacks. It also covers initial snapshots, reconnect
+	// reconciliation, and rows removed by unsubscribe or subscription failure.
+	OnTxStart(fn func()) DbConnectionBuilder
+	// OnTxFinish runs after the batch, including when row decoding fails.
+	// A nonnil error means the cache may be partially updated and Run will stop.
+	// Both hooks run synchronously in Run; they must not wait for SDK responses.
+	OnTxFinish(fn func(err error)) DbConnectionBuilder
 	Build(ctx context.Context) (DbConnection, error)
 }
 
@@ -101,6 +109,8 @@ type dbConnectionBuilder struct {
 	onConnectError     func(error)
 	onDisconnect       func(DbConnection, error)
 	onReducerError     func(error)
+	onTxStart          func()
+	onTxFinish         func(error)
 }
 
 func (b *dbConnectionBuilder) WithAutomaticReconnect() DbConnectionBuilder {
@@ -155,6 +165,16 @@ func (b *dbConnectionBuilder) OnDisconnect(fn func(DbConnection, error)) DbConne
 
 func (b *dbConnectionBuilder) OnReducerError(fn func(error)) DbConnectionBuilder {
 	b.onReducerError = fn
+	return b
+}
+
+func (b *dbConnectionBuilder) OnTxStart(fn func()) DbConnectionBuilder {
+	b.onTxStart = fn
+	return b
+}
+
+func (b *dbConnectionBuilder) OnTxFinish(fn func(error)) DbConnectionBuilder {
+	b.onTxFinish = fn
 	return b
 }
 
@@ -216,6 +236,8 @@ func (b *dbConnectionBuilder) Build(ctx context.Context) (DbConnection, error) {
 		onConnectError:     b.onConnectError,
 		onDisconnect:       b.onDisconnect,
 		onReducerError:     b.onReducerError,
+		onTxStart:          b.onTxStart,
+		onTxFinish:         b.onTxFinish,
 	}
 
 	return conn, nil
@@ -305,6 +327,8 @@ type dbConnection struct {
 	onConnectError func(error)
 	onDisconnect   func(DbConnection, error)
 	onReducerError func(error)
+	onTxStart      func()
+	onTxFinish     func(error)
 
 	// State maps only accessed from the Run() goroutine event loop, so they
 	// need no synchronization: there is exactly one writer goroutine.
@@ -787,13 +811,41 @@ func (c *dbConnection) handleIncoming(data []byte) error {
 // from the Run() goroutine event loop.
 func (c *dbConnection) dispatchServerMessage(msg protocol.ServerMessage) {
 	switch m := msg.(type) {
+	case *protocol.TransactionUpdate, *protocol.SubscribeApplied, *protocol.SubscribeBatchApplied,
+		*protocol.UnsubscribeApplied, *protocol.SubscriptionError:
+	case *protocol.ReducerResult:
+		if _, ok := m.Outcome.(*protocol.ReducerOk); !ok {
+			c.dispatchMessage(msg)
+			return
+		}
+	default:
+		c.dispatchMessage(msg)
+		return
+	}
+	if c.onTxStart != nil {
+		c.onTxStart()
+	}
+	defer func() {
+		if c.onTxFinish != nil {
+			c.onTxFinish(c.rowDecodeErr)
+		}
+	}()
+	c.dispatchMessage(msg)
+}
+
+// Batch members use this dispatcher so their shared boundary is not nested.
+func (c *dbConnection) dispatchMessage(msg protocol.ServerMessage) {
+	switch m := msg.(type) {
 	case *protocol.SubscribeBatchApplied:
 		for _, result := range m.Results {
 			if result.Rows != nil {
-				c.dispatchServerMessage(&protocol.SubscribeApplied{RequestID: m.RequestID, QuerySetID: result.QuerySetID, Rows: *result.Rows})
+				c.dispatchMessage(&protocol.SubscribeApplied{RequestID: m.RequestID, QuerySetID: result.QuerySetID, Rows: *result.Rows})
 			}
 			if result.Error != nil {
-				c.dispatchServerMessage(&protocol.SubscriptionError{RequestID: &m.RequestID, QuerySetID: result.QuerySetID, Error: *result.Error})
+				c.dispatchMessage(&protocol.SubscriptionError{RequestID: &m.RequestID, QuerySetID: result.QuerySetID, Error: *result.Error})
+			}
+			if c.rowDecodeErr != nil {
+				return
 			}
 		}
 	case *protocol.InitialConnection:
@@ -913,10 +965,11 @@ func (c *dbConnection) dispatchServerMessage(msg protocol.ServerMessage) {
 					continue
 				}
 				for _, data := range rows {
-					row, err := c.cache.DecodeRow(tableName, bsatn.NewReader(data))
-					if err == nil {
-						tc.ApplyDelete(data, row)
+					row, err := c.decodeCacheRow(tableName, bsatn.NewReader(data))
+					if err != nil {
+						return
 					}
+					tc.ApplyDelete(data, row)
 				}
 			}
 			if sub.onError != nil {
